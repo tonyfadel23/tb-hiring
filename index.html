@@ -37,6 +37,7 @@
         // Application State
         let personnel = [];
         let tribes = [];
+        let logs = [];
         let config = {
             strategicGoal: 0,
 
@@ -76,6 +77,7 @@
         const getConfigDoc = () => doc(db, 'artifacts', appId, 'public', 'data', 'config', 'settings');
         const getTribesCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'tribes');
         const getPersonnelCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'personnel');
+        const getLogsCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'logs');
 
         // DOM Elements
         let loginScreen, appDashboard, emptyState, loadingOverlay, entryModal;
@@ -172,6 +174,16 @@
                 personnel = querySnap.docs.map(docu => ({ id: docu.id, ...docu.data() }));
                 refreshDashboard();
             }, (err) => console.error("Personnel Sync Error", err));
+
+            onSnapshot(getLogsCol(), (querySnap) => {
+                logs = querySnap.docs.map(docu => ({ id: docu.id, ...docu.data() }))
+                    .sort((a, b) => {
+                        const aTime = a.timestamp?.toDate?.() || new Date(0);
+                        const bTime = b.timestamp?.toDate?.() || new Date(0);
+                        return bTime - aTime;
+                    });
+                if (activeTab === 'logs') renderLogs();
+            }, (err) => console.error("Logs Sync Error", err));
         };
 
         // --- Global View Controls ---
@@ -210,12 +222,26 @@
             refreshDashboard();
         };
 
+        // --- Log Helper ---
+        const logChange = async (action, details) => {
+            try {
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'logs'), {
+                    action: action,
+                    details: details,
+                    timestamp: new Date(),
+                    user: user?.email || 'Anonymous'
+                });
+            } catch (err) {
+                console.error("Logging failed", err);
+            }
+        };
+
         // --- Data Actions ---
         window.addNewHeadcount = async (formData) => {
             setLoading(true);
             try {
                 const secondaryTribes = formData.secondaryTribes ? formData.secondaryTribes.split(',').map(t => t.trim()) : [];
-                await addDoc(getPersonnelCol(), {
+                const newEntry = {
                     name: formData.name || "New Role",
                     role: formData.role || config.roles[0],
                     level: formData.level || "N/A",
@@ -224,13 +250,17 @@
                     status: formData.status || "Open",
                     leadershipTitle: formData.leadershipTitle || "",
                     secondaryTribes: secondaryTribes 
-                });
+                };
+                await addDoc(getPersonnelCol(), newEntry);
+                await logChange('Added Headcount', `Added ${newEntry.name} as ${newEntry.role} (${newEntry.status}) to ${newEntry.tribe}/${newEntry.squad}`);
                 closeEntryModal();
             } catch (err) { console.error(err); }
             setLoading(false);
         };
 
         window.updateMemberField = async (id, field, value) => {
+            const person = personnel.find(p => p.id === id);
+            const oldValue = person ? person[field] : 'N/A';
             const memberRef = doc(db, 'artifacts', appId, 'public', 'data', 'personnel', id);
             let updateData = { [field]: value };
             if (field === 'squad') {
@@ -241,6 +271,7 @@
                 updateData.secondaryTribes = value.split(',').map(t => t.trim()).filter(t => t);
             }
             await updateDoc(memberRef, updateData);
+            await logChange('Updated Field', `Changed ${person?.name || 'person'}'s ${field} from "${oldValue}" to "${value}"`);
         };
 
         window.updateTribeField = async (id, field, value) => {
@@ -249,7 +280,9 @@
 
         window.deleteHeadcount = async (id) => {
             if (!confirm("Permanent deletion?")) return;
+            const person = personnel.find(p => p.id === id);
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'personnel', id));
+            await logChange('Deleted Headcount', `Deleted ${person?.name || 'person'} (${person?.role || 'N/A'}) from ${person?.tribe || 'N/A'}/${person?.squad || 'N/A'}`);
         };
 
         window.handleDragStart = (e, memberId) => {
@@ -480,6 +513,7 @@
         window.saveRosterEdit = async () => {
             const id = document.getElementById('edit-person-id').value;
             const status = document.getElementById('edit-person-status').value;
+            const person = personnel.find(p => p.id === id);
             
             const updates = {
                 name: document.getElementById('edit-person-name').value,
@@ -503,6 +537,18 @@
                 }
                 
                 await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'personnel', id), updates);
+                
+                // Log the change
+                const changes = [];
+                if (person?.name !== updates.name) changes.push(`name to "${updates.name}"`);
+                if (person?.role !== updates.role) changes.push(`role to ${updates.role}`);
+                if (person?.status !== updates.status) changes.push(`status to ${updates.status}`);
+                if (person?.tribe !== updates.tribe) changes.push(`tribe to ${updates.tribe}`);
+                if (person?.squad !== updates.squad) changes.push(`squad to ${updates.squad}`);
+                if (changes.length > 0) {
+                    await logChange('Updated Person', `Updated ${person?.name || 'person'}: ${changes.join(', ')}`);
+                }
+                
                 window.closeRosterEditModal();
             } catch (err) {
                 console.error("Update failed", err);
@@ -1128,6 +1174,89 @@
             container.innerHTML = `<div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12"><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Tribe Selection</h4><div class="flex flex-wrap gap-2">${tribes.map(t => `<button onclick="window.toggleInsightFilter('tribes', '${t.name}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.tribes.includes(t.name) ? 'bg-[#ff5a00] text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${t.name}</button>`).join('')}</div></div><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Squad Selection</h4><div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto no-scrollbar">${tribes.flatMap(t => t.squads || []).map(s => `<button onclick="window.toggleInsightFilter('squads', '${s}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.squads.includes(s) ? 'bg-[#ff5a00] text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${s}</button>`).join('')}</div></div></div><div class="grid lg:grid-cols-3 gap-10 mb-12"><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-indigo-500 mb-8 tracking-widest">Engineering Leverage</h4><div class="space-y-6"><div><h3 class="text-4xl font-black">${r.engPm}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PM (Target ${config.ratios.pm.min}:1 - ${config.ratios.pm.max}:1)</p></div><div class="pt-4 border-t border-slate-50"><h3 class="text-4xl font-black">${r.engPd}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PD (Target ${config.ratios.design.min}:1 - ${config.ratios.design.max}:1)</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-emerald-500 mb-8 tracking-widest">Composition Mix</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${((rC.eng/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Eng Share</p></div><div class="text-right"><h3 class="text-4xl font-black">${((rC.pm/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Product Share</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-orange-500 mb-8 tracking-widest">Bench Strength</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${leaders}</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Leaders</p></div><div class="text-right"><h3 class="text-4xl font-black">${((leaders/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Density Mix</p></div></div></div></div>`;
         };
 
+        const renderLogs = () => {
+            const container = document.getElementById('logs-view-content');
+            if (!container) return;
+
+            // Filter logs from last 10 days
+            const tenDaysAgo = new Date();
+            tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
+            
+            const recentLogs = logs.filter(log => {
+                const logDate = log.timestamp?.toDate?.() || new Date(0);
+                return logDate >= tenDaysAgo;
+            });
+
+            const getActionIcon = (action) => {
+                if (action.includes('Added')) return 'fa-plus-circle text-emerald-500';
+                if (action.includes('Updated')) return 'fa-edit text-blue-500';
+                if (action.includes('Deleted')) return 'fa-trash text-red-500';
+                return 'fa-circle text-slate-400';
+            };
+
+            const formatTimestamp = (timestamp) => {
+                if (!timestamp?.toDate) return 'Unknown time';
+                const date = timestamp.toDate();
+                const now = new Date();
+                const diffMs = now - date;
+                const diffMins = Math.floor(diffMs / 60000);
+                const diffHours = Math.floor(diffMs / 3600000);
+                const diffDays = Math.floor(diffMs / 86400000);
+
+                if (diffMins < 1) return 'Just now';
+                if (diffMins < 60) return `${diffMins}m ago`;
+                if (diffHours < 24) return `${diffHours}h ago`;
+                if (diffDays < 10) return `${diffDays}d ago`;
+                return date.toLocaleDateString();
+            };
+
+            container.innerHTML = `
+                <div class="bg-white rounded-[56px] p-16 border border-slate-100 shadow-sm">
+                    <div class="flex items-center justify-between mb-12">
+                        <div>
+                            <h2 class="text-4xl font-black uppercase text-slate-900 tracking-tighter">Activity Logs</h2>
+                            <p class="text-sm text-slate-500 font-medium mt-2">Last 10 days of changes</p>
+                        </div>
+                        <div class="flex items-center gap-2 px-4 py-2 rounded-2xl bg-slate-50">
+                            <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                            <span class="text-xs font-bold text-slate-600">${recentLogs.length} Recent Changes</span>
+                        </div>
+                    </div>
+
+                    ${recentLogs.length === 0 ? `
+                        <div class="text-center py-20">
+                            <div class="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                                <i class="fa-solid fa-clock-rotate-left text-3xl text-slate-300"></i>
+                            </div>
+                            <h3 class="text-xl font-black text-slate-400 mb-2">No Recent Activity</h3>
+                            <p class="text-slate-400 text-sm">Changes will appear here when you make updates</p>
+                        </div>
+                    ` : `
+                        <div class="space-y-3">
+                            ${recentLogs.map(log => `
+                                <div class="flex items-start gap-4 p-6 rounded-3xl border border-slate-100 hover:border-slate-200 hover:shadow-md transition-all">
+                                    <div class="flex-shrink-0 w-10 h-10 rounded-2xl bg-slate-50 flex items-center justify-center">
+                                        <i class="fa-solid ${getActionIcon(log.action)} text-lg"></i>
+                                    </div>
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex items-start justify-between gap-4 mb-2">
+                                            <h4 class="font-black text-slate-900 text-sm">${log.action}</h4>
+                                            <span class="text-xs font-bold text-slate-400 whitespace-nowrap">${formatTimestamp(log.timestamp)}</span>
+                                        </div>
+                                        <p class="text-sm text-slate-600 font-medium mb-2">${log.details}</p>
+                                        <div class="flex items-center gap-2">
+                                            <i class="fa-solid fa-user text-[10px] text-slate-300"></i>
+                                            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">${log.user || 'System'}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `}
+                </div>
+            `;
+        };
+
         const renderHeaderStats = () => {
             const activePersonnel = personnel.filter(p => p.status !== 'Resigned');
             const filled = activePersonnel.filter(p => p.status === 'Hired').length;
@@ -1150,6 +1279,7 @@
             if (activeTab === 'functions') renderFunctionsList();
             if (activeTab === 'roster') renderRoster();
             if (activeTab === 'insights') renderInsights();
+            if (activeTab === 'logs') renderLogs();
             if (activeTab === 'config') renderConfig();
             if (activeTab === 'squad-manage') renderSquadManage();
             if (activeTab === 'tribe-manage') renderTribeManage();
@@ -1287,18 +1417,26 @@
                 <div onclick="window.setTab('functions')" data-tab="functions" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Functions</div>
                 <div onclick="window.setTab('roster')" data-tab="roster" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Roster</div>
                 <div onclick="window.setTab('insights')" data-tab="insights" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Insights</div>
+                <div onclick="window.setTab('logs')" data-tab="logs" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Logs</div>
                 <div onclick="window.setTab('config')" data-tab="config" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Config</div>
             </div>
             <div class="flex items-center gap-6"><button onclick="window.openEntryModal()" class="bg-[#ff5a00] text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-orange-100">New Entry</button><button id="logout-btn" class="w-12 h-12 rounded-2xl bg-slate-50 text-slate-400 hover:text-red-500 flex items-center justify-center transition-colors"><i class="fa-solid fa-right-from-bracket text-sm"></i></button></div>
         </nav>
 
         <main class="pt-40 pb-24 px-12 max-w-[1800px] mx-auto">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+                <div class="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex items-center gap-4 group transition-all hover:border-indigo-100"><div class="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-lg transition-transform group-hover:scale-110"><i class="fa-solid fa-user-group"></i></div><div><p class="text-[8px] font-black text-slate-400 uppercase tracking-widest">Filled FTE</p><h3 id="stat-filled" class="text-2xl font-black tracking-tighter">0</h3></div></div>
+                <div class="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex items-center gap-4 group transition-all hover:border-amber-100"><div class="w-12 h-12 bg-orange-50 text-orange-600 rounded-2xl flex items-center justify-center text-lg transition-transform group-hover:scale-110"><i class="fa-solid fa-bullseye"></i></div><div><p class="text-[8px] font-black text-slate-400 uppercase tracking-widest">Strategic Goal</p><h3 id="stat-goal" class="text-2xl font-black tracking-tighter">0</h3></div></div>
+                <div class="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex items-center gap-4 group transition-all hover:border-emerald-100"><div class="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center text-lg transition-transform group-hover:scale-110"><i class="fa-solid fa-trophy"></i></div><div><p class="text-[9px] font-black text-slate-400 uppercase tracking-widest">Capacity</p><h3 id="stat-capacity" class="text-2xl font-black tracking-tighter">0%</h3></div></div>
+                <div class="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex items-center gap-4 group transition-all hover:border-rose-100"><div class="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-lg transition-transform group-hover:scale-110"><i class="fa-solid fa-clock"></i></div><div><p class="text-[9px] font-black text-slate-400 uppercase tracking-widest">Vacancies</p><h3 id="stat-vacancy" class="text-2xl font-black tracking-tighter">0</h3></div></div>
+            </div>
             <div id="summary-view" class="tab-view"><div id="summary-container"></div></div>
             <div id="tribes-view" class="tab-view hidden"><div id="tribes-container"></div></div>
             <div id="functions-view" class="tab-view hidden"><div id="functions-container"></div></div>
             <div id="tribe-manage-view" class="tab-view hidden"><div id="tribe-manage-view-content"></div></div>
             <div id="squad-manage-view" class="tab-view hidden"><div id="squad-manage-view-content"></div></div>
             <div id="insights-view" class="tab-view hidden"><div id="insights-view-content"></div></div>
+            <div id="logs-view" class="tab-view hidden"><div id="logs-view-content"></div></div>
             <div id="config-view" class="tab-view hidden"><div id="config-view-content"></div></div>
             <div id="roster-view" class="tab-view hidden"><div class="bg-white rounded-[56px] p-16 border border-slate-100 shadow-sm"><div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 mb-12"><h2 class="text-4xl font-black uppercase text-slate-900 tracking-tighter">Master Roster</h2><div class="flex flex-wrap items-center gap-4 w-full lg:w-auto"><div class="relative flex-1 lg:min-w-[300px]"><i class="fa-solid fa-magnifying-glass absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 text-sm"></i><input type="text" placeholder="Search..." oninput="window.updateRosterFilter('search', this.value)" class="w-full bg-slate-50 border-none rounded-2xl pl-14 pr-6 py-4 font-bold text-sm focus:ring-2 focus:ring-indigo-100 transition-all"></div><select onchange="window.updateRosterFilter('role', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer"><option value="all">All Roles</option><option value="Engineering">Engineering</option><option value="Product Management">Product Management</option><option value="Product Design">Product Design</option><option value="Data Science">Data Science</option></select><select onchange="window.updateRosterFilter('status', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer"><option value="all">All Status</option><option value="Hired">Hired</option><option value="Hiring">Hiring</option><option value="Open">Open</option><option value="Resigned">Resigned</option></select><button onclick="window.openEntryModal()" class="bg-[#ff5a00] text-white px-8 py-4 rounded-3xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-orange-100 hover:scale-105 active:scale-95 transition-all">Add Headcount</button></div></div><div class="mb-6"><p class="text-sm text-slate-500 font-medium"><i class="fa-solid fa-info-circle text-[#ff5a00] mr-2"></i>Click any row to edit details</p></div><div class="overflow-x-auto no-scrollbar"><table class="w-full text-left"><thead><tr class="text-[12px] font-black text-slate-400 uppercase tracking-[0.25em] border-b border-slate-50"><th class="pb-10 px-4">Name</th><th class="pb-10">Role</th><th class="pb-10">Level</th><th class="pb-10">Tribe / Squad</th><th class="pb-10 text-right px-4">Status</th></tr></thead><tbody id="roster-table-body"></tbody></table></div><div class="mt-8 pt-6 border-t border-slate-100" id="roster-stats"></div></div></div>
         </main>
