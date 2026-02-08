@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Headcount Commander | Tech Executive Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, addDoc, getDocs, query 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { 
+            getAuth, signInWithPopup, signInAnonymously, GoogleAuthProvider, onAuthStateChanged, signOut 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // Global configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyDubfBijm6JyrwwRloqthvXCEHQV57Me2Y",
+            authDomain: "tb-hiring-web.firebaseapp.com",
+            databaseURL: "https://tb-hiring-web-default-rtdb.firebaseio.com",
+            projectId: "tb-hiring-web",
+            storageBucket: "tb-hiring-web.firebasestorage.app",
+            messagingSenderId: "724670393100",
+            appId: "1:724670393100:web:72e82f8404d052a6823729",
+            measurementId: "G-CRDQYYGR45"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app); 
+        const db = getFirestore(app);
+        const provider = new GoogleAuthProvider();
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tb-hiring-web';
+
+        // Application State
+        let personnel = [];
+        let tribes = [];
+        let config = {
+            strategicGoal: 0,
+            ratios: {
+                pm: { min: 5, max: 8, label: "Eng : PM" },
+                design: { min: 8, max: 12, label: "Eng : Design" },
+                data: { min: 10, max: 15, label: "Eng : Data" }
+            },
+            compositions: {
+                eng: { val: 65, label: "Engineering" },
+                prod: { val: 15, label: "Product Management" },
+                design: { val: 12, label: "Product Design" },
+                data: { val: 8, label: "Data & Insights" }
+            },
+            roles: ["Engineering", "Product Management", "Product Design", "Data Science", "Data Engineering"],
+            levels: ["IC1", "IC2", "IC3", "IC4", "IC5", "M1", "M2", "M3", "M4"],
+            leadershipTitles: ["Tribe Lead", "Function Head", "Group Lead", "Lead"]
+        };
+
+        let activeTab = 'summary'; 
+        let summaryCategory = 'All'; // NEW: Summary category filter
+        let viewContext = 'all'; 
+        let managedSquadContext = { squad: null, tribe: null };
+        let managedTribeContext = { name: null };
+        let expandedTribes = [];
+        let expandedSquads = [];
+        let expandedFunctions = []; 
+        let user = null;
+        
+        let insightFilters = { tribes: [], squads: [] };
+        let rosterFilters = { search: '', role: 'all', status: 'all' };
+
+        // Firestore Access Helpers
+        const getConfigDoc = () => doc(db, 'artifacts', appId, 'public', 'data', 'config', 'settings');
+        const getTribesCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'tribes');
+        const getPersonnelCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'personnel');
+
+        // DOM Elements
+        let loginScreen, appDashboard, emptyState, loadingOverlay, entryModal;
+
+        const initDOMElements = () => {
+            loginScreen = document.getElementById('login-screen');
+            appDashboard = document.getElementById('app-dashboard');
+            emptyState = document.getElementById('empty-state-setup');
+            loadingOverlay = document.getElementById('loading-overlay');
+            entryModal = document.getElementById('entry-modal');
+        };
+
+        const initListeners = async () => {
+            if (!user) return;
+            try {
+                const configSnap = await getDoc(getConfigDoc());
+                if (!configSnap.exists()) {
+                    emptyState.classList.remove('hidden');
+                    appDashboard.classList.add('hidden');
+                } else {
+                    emptyState.classList.add('hidden');
+                    appDashboard.classList.remove('hidden');
+                }
+            } catch (e) { console.error("Cold start check failed", e); }
+
+            onSnapshot(getConfigDoc(), (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    config = { 
+                        ...config, 
+                        ...data,
+                        ratios: data.ratios || config.ratios,
+                        compositions: data.compositions || config.compositions,
+                        leadershipTitles: data.leadershipTitles || config.leadershipTitles
+                    };
+                    updateModalSelects();
+                    refreshDashboard();
+                }
+            }, (err) => console.error("Config Sync Error", err));
+
+            onSnapshot(getTribesCol(), (querySnap) => {
+                tribes = querySnap.docs.map(doc => ({ id: doc.id, category: 'Unassigned', ...doc.data() }));
+                if (expandedTribes.length === 0 && tribes.length > 0) expandedTribes = [tribes[0].name];
+                updateModalSelects();
+                refreshDashboard();
+            }, (err) => console.error("Tribe Sync Error", err));
+
+            onSnapshot(getPersonnelCol(), (querySnap) => {
+                personnel = querySnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                refreshDashboard();
+            }, (err) => console.error("Personnel Sync Error", err));
+        };
+
+        // --- Global View Controls ---
+        window.expandAllTribes = () => {
+            expandedTribes = tribes.map(t => t.name);
+            refreshDashboard();
+        };
+
+        window.collapseAllTribes = () => {
+            expandedTribes = [];
+            expandedSquads = [];
+            refreshDashboard();
+        };
+
+        window.setSummaryCategory = (cat) => {
+            summaryCategory = cat;
+            refreshDashboard();
+        };
+
+        window.manageSquad = (squadName, tribeName) => {
+            managedSquadContext = { squad: squadName, tribe: tribeName };
+            activeTab = 'squad-manage';
+            refreshDashboard();
+        };
+
+        window.manageTribe = (tribeName) => {
+            managedTribeContext = { name: tribeName };
+            activeTab = 'tribe-manage';
+            refreshDashboard();
+        };
+
+        window.toggleFunctionDeepDive = (key) => {
+            expandedFunctions = expandedFunctions.includes(key) 
+                ? expandedFunctions.filter(f => f !== key) 
+                : [...expandedFunctions, key];
+            refreshDashboard();
+        };
+
+        // --- Data Actions ---
+        window.addNewHeadcount = async (formData) => {
+            setLoading(true);
+            try {
+                const secondaryTribes = formData.secondaryTribes ? formData.secondaryTribes.split(',').map(t => t.trim()) : [];
+                await addDoc(getPersonnelCol(), {
+                    name: formData.name || "New Role",
+                    role: formData.role || config.roles[0],
+                    level: formData.level || "N/A",
+                    tribe: formData.tribe || tribes[0]?.name || "Unassigned",
+                    squad: formData.squad || tribes[0]?.squads[0] || "Unassigned",
+                    status: formData.status || "Open",
+                    leadershipTitle: formData.leadershipTitle || "",
+                    secondaryTribes: secondaryTribes 
+                });
+                closeEntryModal();
+            } catch (err) { console.error(err); }
+            setLoading(false);
+        };
+
+        window.updateMemberField = async (id, field, value) => {
+            const memberRef = doc(db, 'artifacts', appId, 'public', 'data', 'personnel', id);
+            let updateData = { [field]: value };
+            if (field === 'squad') {
+                const parentTribe = tribes.find(t => t.squads.includes(value));
+                if (parentTribe) updateData.tribe = parentTribe.name;
+            }
+            if (field === 'secondaryTribes') {
+                updateData.secondaryTribes = value.split(',').map(t => t.trim()).filter(t => t);
+            }
+            await updateDoc(memberRef, updateData);
+        };
+
+        window.updateTribeField = async (id, field, value) => {
+            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tribes', id), { [field]: value });
+        };
+
+        window.deleteHeadcount = async (id) => {
+            if (!confirm("Permanent deletion?")) return;
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'personnel', id));
+        };
+
+        window.handleDragStart = (e, memberId) => {
+            e.dataTransfer.setData("memberId", memberId);
+            e.target.classList.add('opacity-40');
+        };
+
+        window.handleDragEnd = (e) => {
+            e.target.classList.remove('opacity-40');
+        };
+
+        window.handleDragOver = (e) => {
+            e.preventDefault();
+            const targetCard = e.currentTarget;
+            targetCard.classList.add('ring-2', 'ring-indigo-500', 'ring-offset-4');
+        };
+
+        window.handleDragLeave = (e) => {
+            e.currentTarget.classList.remove('ring-2', 'ring-indigo-500', 'ring-offset-4');
+        };
+
+        window.handleDrop = async (e, targetSquadName, targetTribeName) => {
+            e.preventDefault();
+            e.currentTarget.classList.remove('ring-2', 'ring-indigo-500', 'ring-offset-4');
+            const memberId = e.dataTransfer.getData("memberId");
+            if (memberId) {
+                const memberRef = doc(db, 'artifacts', appId, 'public', 'data', 'personnel', memberId);
+                await updateDoc(memberRef, {
+                    squad: targetSquadName,
+                    tribe: targetTribeName
+                });
+            }
+        };
+
+        window.addTribe = async () => {
+            const name = prompt("Enter new Tribe name:");
+            if (name) { await addDoc(getTribesCol(), { name, squads: [], category: 'Unassigned' }); }
+        };
+
+        window.deleteTribe = async (id) => {
+            if (confirm("Delete tribe and all squad links?")) {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tribes', id));
+            }
+        };
+
+        window.addSquad = async (tribeId, existingSquads) => {
+            const name = prompt("Enter new Squad name:");
+            if (name) {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tribes', tribeId), {
+                    squads: [...existingSquads, name]
+                });
+            }
+        };
+
+        window.deleteSquad = async (tribeId, squadName, existingSquads) => {
+            if (confirm(`Remove squad "${squadName}"?`)) {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tribes', tribeId), {
+                    squads: existingSquads.filter(s => s !== squadName)
+                });
+            }
+        };
+
+        window.updateTribeName = async (id, oldName, newName) => {
+            if (!newName || oldName === newName) return;
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tribes', id), { name: newName });
+                const affected = personnel.filter(p => p.tribe === oldName);
+                for (const p of affected) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'personnel', p.id), { tribe: newName });
+                }
+                if (expandedTribes.includes(oldName)) {
+                    expandedTribes = expandedTribes.map(t => t === oldName ? newName : t);
+                }
+            } catch (err) { console.error("Rename Tribe Failed", err); }
+        };
+
+        window.updateSquadName = async (tribeId, tribeName, oldSq, newSq, allSq) => {
+            if (!newSq || oldSq === newSq) return;
+            try {
+                const newSquads = allSq.map(s => s === oldSq ? newSq : s);
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tribes', tribeId), { squads: newSquads });
+                const affected = personnel.filter(p => p.tribe === tribeName && p.squad === oldSq);
+                for (const p of affected) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'personnel', p.id), { squad: newSq });
+                }
+                if (expandedSquads.includes(oldSq)) {
+                    expandedSquads = expandedSquads.map(s => s === oldSq ? newSq : s);
+                }
+            } catch (err) { console.error("Rename Squad Failed", err); }
+        };
+
+        window.moveSquad = async (sourceTribeId, sourceTribeName, squadName, sourceSquads) => {
+            const otherTribes = tribes.filter(t => t.id !== sourceTribeId);
+            if (otherTribes.length === 0) {
+                alert("No other tribes available to move to.");
+                return;
+            }
+            const tribeNames = otherTribes.map((t, i) => `${i + 1}. ${t.name}`).join('\n');
+            const choice = prompt(`Move "${squadName}" to which tribe?\n\n${tribeNames}\n\nEnter the number:`);
+            if (choice) {
+                const index = parseInt(choice) - 1;
+                if (otherTribes[index]) {
+                    const targetTribe = otherTribes[index];
+                    setLoading(true);
+                    try {
+                        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tribes', sourceTribeId), {
+                            squads: sourceSquads.filter(s => s !== squadName)
+                        });
+                        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tribes', targetTribe.id), {
+                            squads: [...targetTribe.squads, squadName]
+                        });
+                        const affected = personnel.filter(p => p.tribe === sourceTribeName && p.squad === squadName);
+                        for (const p of affected) {
+                            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'personnel', p.id), { 
+                                tribe: targetTribe.name 
+                            });
+                        }
+                    } catch (err) { console.error("Move Squad Failed", err); }
+                    setLoading(false);
+                }
+            }
+        };
+
+        window.addConfigItem = async (key) => {
+            const val = prompt(`Add new ${key.slice(0, -1)}:`);
+            if (val) {
+                const newList = [...config[key], val];
+                await setDoc(getConfigDoc(), { [key]: newList }, { merge: true });
+            }
+        };
+
+        window.removeConfigItem = async (key, val) => {
+            if (confirm(`Remove ${val}?`)) {
+                const newList = config[key].filter(v => v !== val);
+                await setDoc(getConfigDoc(), { [key]: newList }, { merge: true });
+            }
+        };
+
+        window.updateConfig = async (key, val) => {
+            let parsedVal = isNaN(val) || val === '' ? val : parseFloat(val);
+            config[key] = parsedVal;
+            await setDoc(getConfigDoc(), config, { merge: true });
+        };
+
+        window.updateNestedConfig = async (parent, key, field, val) => {
+            let parsedVal = isNaN(val) || val === '' ? val : parseFloat(val);
+            config[parent][key][field] = parsedVal;
+            await setDoc(getConfigDoc(), config, { merge: true });
+        };
+
+        // --- View Logic ---
+        window.setTab = (tab) => {
+            activeTab = tab;
+            refreshDashboard();
+        };
+
+        window.setViewContext = (context) => {
+            viewContext = context;
+            refreshDashboard();
+        };
+
+        window.toggleTribe = (name) => {
+            expandedTribes = expandedTribes.includes(name) ? expandedTribes.filter(t => t !== name) : [...expandedTribes, name];
+            refreshDashboard();
+        };
+
+        window.toggleSquadExpand = (name) => {
+            expandedSquads = expandedSquads.includes(name) ? expandedSquads.filter(s => s !== name) : [...expandedSquads, name];
+            refreshDashboard();
+        };
+
+        window.updateRosterFilter = (key, val) => {
+            rosterFilters[key] = val;
+            renderRoster();
+        };
+
+        window.toggleInsightFilter = (key, val) => {
+            if (insightFilters[key].includes(val)) {
+                insightFilters[key] = insightFilters[key].filter(v => v !== val);
+            } else {
+                insightFilters[key].push(val);
+            }
+            refreshDashboard();
+        };
+
+        window.openEntryModal = () => {
+            updateModalSelects();
+            entryModal.classList.remove('hidden');
+        };
+        window.closeEntryModal = () => entryModal.classList.add('hidden');
+
+        // --- CSV Engine ---
+        window.handleFileUpload = async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async (e) => await processCSV(e.target.result);
+            reader.readAsText(file);
+        };
+
+        const processCSV = async (csvText) => {
+            setLoading(true);
+            try {
+                const lines = csvText.split(/\r?\n/);
+                let currentSection = "";
+                const settingsData = [], rolesData = [];
+                for (let line of lines) {
+                    line = line.trim();
+                    if (!line) continue;
+                    if (line === "[SETTINGS]") { currentSection = "settings"; continue; }
+                    if (line === "[ROLES]") { currentSection = "roles"; continue; }
+                    if (currentSection === "settings") settingsData.push(line.split(","));
+                    if (currentSection === "roles") rolesData.push(line.split(","));
+                }
+                let totalGoal = 0;
+                settingsData.slice(1).forEach(row => {
+                    const val = parseInt(row[1]);
+                    if (!isNaN(val)) totalGoal += val;
+                });
+                const header = rolesData[0];
+                const rawPeople = rolesData.slice(1).map(row => {
+                    const obj = {};
+                    header.forEach((h, i) => obj[h] = row[i]);
+                    return obj;
+                });
+                const rolesSet = new Set(), levelsSet = new Set(), tribeMap = {};
+                rawPeople.forEach(p => {
+                    if (p.Function) rolesSet.add(p.Function);
+                    if (p.Seniority) levelsSet.add(p.Seniority);
+                    if (p.TribeName) {
+                        if (!tribeMap[p.TribeName]) tribeMap[p.TribeName] = new Set();
+                        if (p.SquadName) tribeMap[p.TribeName].add(p.SquadName);
+                    }
+                });
+                await setDoc(getConfigDoc(), {
+                    ...config,
+                    strategicGoal: totalGoal,
+                    roles: Array.from(rolesSet),
+                    levels: Array.from(levelsSet).sort()
+                });
+                for (const [name, squads] of Object.entries(tribeMap)) {
+                    await addDoc(getTribesCol(), { name, squads: Array.from(squads), category: 'Unassigned' });
+                }
+                for (const p of rawPeople) {
+                    if (!p.Name) continue;
+                    await addDoc(getPersonnelCol(), {
+                        name: p.Name,
+                        role: p.Function || "Unassigned",
+                        level: p.Seniority || "N/A",
+                        tribe: p.TribeName || "N/A",
+                        squad: p.SquadName || "N/A",
+                        status: p.Status === "filled" ? "Hired" : (p.Status === "open" ? "Hiring" : "Open"),
+                        leadershipTitle: "",
+                        secondaryTribes: []
+                    });
+                }
+                emptyState.classList.add('hidden');
+                appDashboard.classList.remove('hidden');
+                setLoading(false);
+            } catch (err) {
+                console.error(err);
+                alert("Processing failed: " + err.message);
+                setLoading(false);
+            }
+        };
+
+        const setLoading = (val) => {
+            if (loadingOverlay) loadingOverlay.classList.toggle('hidden', !val);
+        };
+
+        // --- Render Helpers ---
+        const getFunctionKey = (role) => {
+            const r = role.toLowerCase();
+            if (r.includes('eng') && !r.includes('data')) return 'eng';
+            if (r.includes('prod') && r.includes('manage')) return 'prod';
+            if (r.includes('prod') && r.includes('design')) return 'design';
+            if (r.includes('data')) return 'data';
+            return 'other';
+        };
+
+        const getRoleCounts = (list) => {
+            const pm = list.filter(p => getFunctionKey(p.role) === 'prod').length;
+            const pd = list.filter(p => getFunctionKey(p.role) === 'design').length;
+            const eng = list.filter(p => getFunctionKey(p.role) === 'eng').length;
+            const da = list.filter(p => getFunctionKey(p.role) === 'data').length;
+            return { pm, pd, eng, da };
+        };
+
+        const getLeverageRatios = (list) => {
+            const r = getRoleCounts(list);
+            return {
+                engPm: r.pm > 0 ? (r.eng / r.pm).toFixed(1) : (r.eng > 0 ? '∞' : '0'),
+                engPd: r.pd > 0 ? (r.eng / r.pd).toFixed(1) : (r.eng > 0 ? '∞' : '0'),
+                engDa: r.da > 0 ? (r.eng / r.da).toFixed(1) : (r.eng > 0 ? '∞' : '0')
+            };
+        };
+
+        const getRoleAbbr = (role) => {
+            const r = role.toLowerCase();
+            if (r.includes('eng') && !r.includes('data')) return 'Eng';
+            if (r.includes('prod') && r.includes('manage')) return 'PM';
+            if (r.includes('prod') && r.includes('design')) return 'PD';
+            if (r.includes('data')) return 'DA';
+            return 'Other';
+        };
+
+        const formatCountsTag = (list) => {
+            const c = getRoleCounts(list);
+            const baseClass = "bg-slate-50 border border-slate-100 text-slate-400 px-2 py-0.5 rounded-md font-black";
+            return `
+                <div class="flex items-center gap-1.5 font-black text-[9px] uppercase tracking-tighter">
+                    <span class="${baseClass}">${c.pm}PM</span>
+                    <span class="${baseClass}">${c.pd}PD</span>
+                    <span class="${baseClass}">${c.eng}ENG</span>
+                    <span class="${baseClass}">${c.da}DA</span>
+                </div>
+            `;
+        };
+
+        const formatLeverageTags = (list, vertical = false) => {
+            const r = getLeverageRatios(list);
+            const pmOff = r.engPm !== '∞' && r.engPm !== '0' && (parseFloat(r.engPm) < config.ratios.pm.min || parseFloat(r.engPm) > config.ratios.pm.max);
+            const pdOff = r.engPd !== '∞' && r.engPd !== '0' && (parseFloat(r.engPd) < config.ratios.design.min || parseFloat(r.engPd) > config.ratios.design.max);
+            const daOff = r.engDa !== '∞' && r.engDa !== '0' && (parseFloat(r.engDa) < config.ratios.data.min || parseFloat(r.engDa) > config.ratios.data.max);
+
+            const std = "bg-slate-800 text-slate-100 border border-slate-700 px-2 py-0.5 rounded-md whitespace-nowrap";
+            const err = "bg-red-600 text-white border border-red-500 px-2 py-0.5 rounded-md shadow-sm font-black whitespace-nowrap";
+
+            return `
+                <div class="flex ${vertical ? 'flex-col items-end gap-1' : 'items-center gap-1.5'} font-black text-[9px] uppercase tracking-tighter">
+                    <span class="${pmOff ? err : std}">${r.engPm}:1 PM</span>
+                    <span class="${pdOff ? err : std}">${r.engPd}:1 PD</span>
+                    <span class="${daOff ? err : std}">${r.engDa}:1 DA</span>
+                </div>
+            `;
+        };
+
+        const getRoleColorClass = (role) => {
+            const r = role.toLowerCase();
+            if (r.includes('eng') && !r.includes('data')) return 'bg-indigo-50 text-indigo-600 border-indigo-100';
+            if (r.includes('prod') && r.includes('manage')) return 'bg-amber-50 text-amber-600 border-amber-100';
+            if (r.includes('prod') && r.includes('design')) return 'bg-rose-50 text-rose-600 border-rose-100';
+            if (r.includes('data')) return 'bg-emerald-50 text-emerald-600 border-emerald-100';
+            return 'bg-slate-50 text-slate-600 border-slate-100';
+        };
+
+        const updateModalSelects = () => {
+            const rSel = document.getElementById('modal-role-select');
+            const lSel = document.getElementById('modal-level-select');
+            const tSel = document.getElementById('modal-tribe-select');
+            const sSel = document.getElementById('modal-squad-select');
+            const ltSel = document.getElementById('modal-ltitle-select');
+
+            if (rSel) rSel.innerHTML = config.roles.map(r => `<option value="${r}">${r}</option>`).join('');
+            if (lSel) lSel.innerHTML = `<option value="">(Optional) No Level</option>` + config.levels.map(l => `<option value="${l}">${l}</option>`).join('');
+            if (tSel) tSel.innerHTML = tribes.map(t => `<option value="${t.name}">${t.name}</option>`).join('');
+            if (ltSel) ltSel.innerHTML = `<option value="">Individual Contributor</option>` + config.leadershipTitles.map(t => `<option value="${t}">${t}</option>`).join('');
+
+            const updateSquadOptions = () => {
+                const selectedTribe = tribes.find(t => t.name === tSel.value);
+                if (selectedTribe && sSel) {
+                    sSel.innerHTML = selectedTribe.squads.map(s => `<option value="${s}">${s}</option>`).join('');
+                }
+            };
+            if (tSel) tSel.onchange = updateSquadOptions;
+            updateSquadOptions();
+        };
+
+        const getTribeLead = (tribeName, functionKey) => {
+            const leads = personnel.filter(p => {
+                const tribeMatch = p.tribe === tribeName || (p.secondaryTribes && p.secondaryTribes.includes(tribeName));
+                const funcMatch = getFunctionKey(p.role) === functionKey;
+                const activeLead = p.leadershipTitle && p.status === 'Hired';
+                return tribeMatch && funcMatch && activeLead;
+            });
+            if (leads.length === 0) return "-";
+            return leads.map(l => l.name).join(', ');
+        };
+
+        const getTribeFunctionCount = (tribeName, functionKey) => {
+            return personnel.filter(p => p.tribe === tribeName && getFunctionKey(p.role) === functionKey && p.status === 'Hired').length;
+        };
+
+        // --- Render Summary Page ---
+        const renderSummary = () => {
+            const container = document.getElementById('summary-container');
+            if (!container) return;
+
+            // Filter context for the whole summary based on selected Category toggle
+            let targetTribes = tribes;
+            if (summaryCategory !== 'All') {
+                targetTribes = tribes.filter(t => t.category === summaryCategory);
+            }
+            const tribeNames = targetTribes.map(t => t.name);
+            const filteredPersonnel = personnel.filter(p => tribeNames.includes(p.tribe));
+            const hiredTotal = filteredPersonnel.filter(p => p.status === 'Hired').length;
+            const vacancyTotal = filteredPersonnel.filter(p => p.status !== 'Hired').length;
+            const ratios = getLeverageRatios(filteredPersonnel.filter(p => p.status === 'Hired'));
+
+            // Adjust global goal proportionately for the progress bar if not 'All'
+            const effectiveGoal = summaryCategory === 'All' ? config.strategicGoal : Math.round((config.strategicGoal * (targetTribes.length / (tribes.length || 1))));
+
+            container.innerHTML = `
+                <!-- Category Toggle -->
+                <div class="flex items-center gap-2 bg-slate-100/50 p-1.5 rounded-[28px] w-fit mb-12 border border-slate-200 shadow-inner">
+                    ${['All', 'Feature', 'Platform', 'Data'].map(cat => `
+                        <button onclick="window.setSummaryCategory('${cat}')" class="px-8 py-3 rounded-[22px] text-[11px] font-black uppercase tracking-widest transition-all ${summaryCategory === cat ? 'bg-white text-indigo-600 shadow-lg border border-slate-100' : 'text-slate-400 hover:text-slate-600'}">${cat}</button>
+                    `).join('')}
+                </div>
+
+                <div class="grid lg:grid-cols-2 gap-10 mb-12">
+                    <div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-indigo-50/50 -mr-16 -mt-16 rounded-full group-hover:scale-110 transition-transform duration-700"></div>
+                        <h2 class="text-3xl font-black uppercase tracking-tighter text-slate-900 mb-8">${summaryCategory} Progress</h2>
+                        <div class="space-y-6">
+                            <div>
+                                <div class="flex justify-between mb-4"><span class="text-[10px] font-black uppercase text-slate-400 tracking-widest">Goal Realization</span><span class="font-black">${hiredTotal} / ${effectiveGoal}</span></div>
+                                <div class="h-4 bg-slate-50 rounded-full overflow-hidden">
+                                    <div class="h-full bg-indigo-600 rounded-full transition-all duration-1000" style="width: ${(hiredTotal / (effectiveGoal || 1)) * 100}%"></div>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-6 pt-4">
+                                <div class="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                                    <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Open Positions</p>
+                                    <h3 class="text-3xl font-black text-red-500">${vacancyTotal}</h3>
+                                </div>
+                                <div class="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                                    <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Hired Rate</p>
+                                    <h3 class="text-3xl font-black text-emerald-500">${Math.round((hiredTotal / (filteredPersonnel.length || 1)) * 100)}%</h3>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-slate-900 rounded-[48px] p-12 border border-slate-800 shadow-2xl text-white relative group">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-white/5 -mr-16 -mt-16 rounded-full group-hover:scale-110 transition-transform duration-700"></div>
+                        <h2 class="text-3xl font-black uppercase tracking-tighter mb-8">${summaryCategory} Ratios</h2>
+                        <div class="grid grid-cols-3 gap-6">
+                            <div class="border-l-2 border-indigo-500 pl-6 py-2">
+                                <p class="text-[9px] font-black uppercase opacity-40 mb-2 tracking-widest">Eng : PM</p>
+                                <h3 class="text-3xl font-black">${ratios.engPm}:1</h3>
+                                <p class="text-[8px] opacity-30 mt-1 uppercase tracking-widest">Target ${config.ratios.pm.min}-${config.ratios.pm.max}</p>
+                            </div>
+                            <div class="border-l-2 border-rose-500 pl-6 py-2">
+                                <p class="text-[9px] font-black uppercase opacity-40 mb-2 tracking-widest">Eng : Design</p>
+                                <h3 class="text-3xl font-black">${ratios.engPd}:1</h3>
+                                <p class="text-[8px] opacity-30 mt-1 uppercase tracking-widest">Target ${config.ratios.design.min}-${config.ratios.design.max}</p>
+                            </div>
+                            <div class="border-l-2 border-emerald-500 pl-6 py-2">
+                                <p class="text-[9px] font-black uppercase opacity-40 mb-2 tracking-widest">Eng : Data</p>
+                                <h3 class="text-3xl font-black">${ratios.engDa}:1</h3>
+                                <p class="text-[8px] opacity-30 mt-1 uppercase tracking-widest">Target ${config.ratios.data.min}-${config.ratios.data.max}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Snapshot Table -->
+                <div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm animate-in overflow-hidden relative">
+                    <h2 class="text-3xl font-black uppercase tracking-tighter text-slate-900 mb-10">Tribe Snapshot</h2>
+                    <div class="overflow-x-auto no-scrollbar">
+                        <table class="w-full text-left">
+                            <thead>
+                                <tr class="text-[11px] font-black text-slate-300 uppercase tracking-[0.2em] border-b border-slate-50">
+                                    <th class="pb-6 pr-12 min-w-[220px]">Dimension</th>
+                                    ${targetTribes.map(t => `<th class="pb-6 px-8 text-center min-w-[160px] font-black text-slate-900 uppercase tracking-tighter text-lg">${t.name}</th>`).join('')}
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-50">
+                                <tr class="bg-slate-50/30"><td colspan="${targetTribes.length + 1}" class="py-3 px-4 text-[9px] font-black uppercase text-slate-400 tracking-widest">Leadership</td></tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-amber-500 tracking-widest">PM Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'prod')}</td>`).join('')}</tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-rose-500 tracking-widest">Design Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'design')}</td>`).join('')}</tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-indigo-500 tracking-widest">Eng Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'eng')}</td>`).join('')}</tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-emerald-500 tracking-widest">Data Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'data')}</td>`).join('')}</tr>
+                                
+                                <tr class="bg-slate-950 text-white"><td class="py-6 pl-6 font-black text-[11px] uppercase tracking-[0.2em]">Total Tribe (FTE)</td>${targetTribes.map(t => `<td class="py-6 px-8 text-center text-2xl font-black">${personnel.filter(p => p.tribe === t.name && p.status === 'Hired').length}</td>`).join('')}</tr>
+                                
+                                <tr class="bg-slate-50/30"><td colspan="${targetTribes.length + 1}" class="py-3 px-4 text-[9px] font-black uppercase text-slate-400 tracking-widest">Functional FTE Counts</td></tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-slate-900 tracking-widest">Engineering</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-indigo-600">${getTribeFunctionCount(t.name, 'eng')}</td>`).join('')}</tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-slate-900 tracking-widest">Product</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-amber-600">${getTribeFunctionCount(t.name, 'prod')}</td>`).join('')}</tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-slate-900 tracking-widest">Design</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-rose-600">${getTribeFunctionCount(t.name, 'design')}</td>`).join('')}</tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-slate-900 tracking-widest">Data</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-emerald-600">${getTribeFunctionCount(t.name, 'data')}</td>`).join('')}</tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderTribeList = () => {
+            const container = document.getElementById('tribes-container');
+            if (!container) return;
+            container.innerHTML = `
+                <div class="flex justify-between items-center mb-8 pr-4">
+                    <h2 class="text-3xl font-black uppercase tracking-tighter text-slate-900">Tribes & Squads</h2>
+                    <div class="flex gap-3">
+                        <button onclick="window.expandAllTribes()" class="bg-white border border-slate-200 px-5 py-2.5 rounded-xl text-[9px] font-black uppercase text-slate-500 hover:bg-slate-50 transition-colors shadow-sm tracking-widest">Expand All Tribes</button>
+                        <button onclick="window.collapseAllTribes()" class="bg-white border border-slate-200 px-5 py-2.5 rounded-xl text-[9px] font-black uppercase text-slate-500 hover:bg-slate-50 transition-colors shadow-sm tracking-widest">Collapse All</button>
+                    </div>
+                </div>
+            `;
+            const ctxPersonnel = viewContext === 'hired' ? personnel.filter(p => p.status === 'Hired') : personnel;
+            tribes.forEach((tribe, idx) => {
+                const isExpanded = expandedTribes.includes(tribe.name);
+                const tribePersonnel = ctxPersonnel.filter(p => p.tribe === tribe.name);
+                const tribeAll = personnel.filter(p => p.tribe === tribe.name);
+                const hiredCount = tribePersonnel.filter(p => p.status === 'Hired').length;
+                const vacancyCount = tribeAll.filter(p => p.status !== 'Hired').length;
+                const weight = ((tribePersonnel.length / (ctxPersonnel.length || 1)) * 100).toFixed(1);
+                const div = document.createElement('div');
+                div.className = "mb-12 animate-in";
+                if (idx > 0) { const hr = document.createElement('hr'); hr.className = "border-slate-100 mb-10"; container.appendChild(hr); }
+                div.innerHTML += `
+                    <div class="flex flex-col mb-6">
+                        <div class="flex items-center gap-5 cursor-pointer group" onclick="window.toggleTribe('${tribe.name}')">
+                             <i class="fa-solid fa-chevron-down transition-transform ${isExpanded ? '' : '-rotate-90'} text-slate-300"></i>
+                             <h2 class="text-3xl font-black uppercase tracking-tighter text-slate-900">${tribe.name}</h2>
+                        </div>
+                        <div class="flex items-center gap-3 mt-4 ml-8 overflow-x-auto no-scrollbar pb-2 text-[10px] font-black uppercase tracking-widest">
+                            <span class="bg-slate-900 text-white px-4 py-1.5 rounded-full whitespace-nowrap">${hiredCount} PEOPLE</span>
+                            <span class="bg-indigo-50 text-indigo-600 px-4 py-1.5 rounded-full whitespace-nowrap">${tribe.squads.length} SQUADS</span>
+                            <div class="bg-white border border-slate-100 px-4 py-1.5 rounded-full flex items-center gap-2 shadow-sm">${formatCountsTag(tribePersonnel)}<span class="h-3 w-[1px] bg-slate-200 ml-1"></span><span class="text-slate-400 ml-1">Composition</span></div>
+                            <div class="bg-slate-50 border border-slate-100 px-4 py-1.5 rounded-full flex items-center gap-2 shadow-sm">${formatLeverageTags(tribePersonnel, false)}<span class="h-3 w-[1px] bg-slate-200 ml-1"></span><button onclick="window.setViewContext('${viewContext === 'all' ? 'hired' : 'all'}')" class="text-indigo-500 hover:text-indigo-700 cursor-pointer ml-1">${viewContext}</button></div>
+                            <span class="bg-slate-50 border border-slate-100 px-4 py-1.5 rounded-full text-indigo-600 whitespace-nowrap">${weight}% WEIGHT</span>
+                            <span class="bg-red-50 px-4 py-1.5 rounded-full text-red-400">${vacancyCount} OPEN ROLES</span>
+                            <button onclick="window.manageTribe('${tribe.name}')" class="bg-slate-950 text-white px-5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-colors shadow-lg ml-2">Manage Tribe</button>
+                        </div>
+                    </div>
+                    <div class="${isExpanded ? 'grid' : 'hidden'} lg:grid-cols-2 xl:grid-cols-3 gap-8">
+                        ${tribe.squads.map(sq => {
+                            const squadMbs = ctxPersonnel.filter(p => p.tribe === tribe.name && p.squad === sq);
+                            const totalHC = personnel.filter(p => p.tribe === tribe.name && p.squad === sq).length;
+                            const vcs = personnel.filter(p => p.tribe === tribe.name && p.squad === sq && p.status !== 'Hired').length;
+                            const isSqExpanded = expandedSquads.includes(sq);
+                            return `
+                                <div ondragover="window.handleDragOver(event)" ondragleave="window.handleDragLeave(event)" ondrop="window.handleDrop(event, '${sq}', '${tribe.name}')" class="bg-white rounded-[48px] p-10 border border-slate-100 shadow-sm relative group hover:shadow-2xl transition-all duration-500">
+                                    <div class="flex justify-between items-start mb-10">
+                                        <div class="pr-4 min-w-0 flex-1"><h3 class="font-black text-2xl uppercase tracking-tighter text-slate-900 break-words leading-none">${sq}</h3><div class="mt-3">${formatCountsTag(squadMbs)}</div></div>
+                                        <div class="flex flex-col items-end flex-shrink-0">
+                                            <div class="bg-slate-50 text-slate-900 border border-slate-100 px-4 py-2.5 rounded-2xl flex items-center justify-center font-black text-sm shadow-sm min-w-[50px]">${totalHC} ${vcs > 0 ? `<span class="mx-2 text-slate-200">|</span> <span class="text-red-600">${vcs}</span>` : ''}</div>
+                                            <span class="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-1">Headcount</span>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex items-center gap-3">
+                                            <div class="flex -space-x-4">${squadMbs.slice(0, 4).map(m => `<div class="w-11 h-11 rounded-full border-[4px] border-white bg-slate-100 flex items-center justify-center text-xs font-black text-slate-600 shadow-sm">${m.name.charAt(0)}</div>`).join('')}</div>
+                                            <button onclick="window.toggleSquadExpand('${sq}')" class="w-10 h-10 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-400 hover:bg-indigo-50 hover:text-indigo-600 transition-all active:scale-90 shadow-sm"><i class="fa-solid fa-chevron-${isSqExpanded ? 'up' : 'down'} text-[10px]"></i></button>
+                                        </div>
+                                        <button onclick="window.manageSquad('${sq}', '${tribe.name}')" class="bg-slate-900 text-white px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-lg shadow-slate-200">Manage Squad</button>
+                                    </div>
+                                    ${isSqExpanded ? `<div class="mt-8 space-y-3 border-t border-slate-50 pt-8 animate-in">${squadMbs.map(m => `<div draggable="true" ondragstart="window.handleDragStart(event, '${m.id}')" ondragend="window.handleDragEnd(event)" class="flex justify-between items-center p-3 rounded-2xl border ${getRoleColorClass(m.role)}"><div class="flex items-center gap-3"><div class="w-2.5 h-2.5 rounded-full ${m.status === 'Hired' ? 'bg-current opacity-60' : 'bg-white border border-current opacity-40'}"></div><div class="flex flex-col"><span class="text-xs font-black uppercase tracking-tight">${m.name}</span>${m.leadershipTitle ? `<span class="text-[8px] font-black text-indigo-500 uppercase tracking-widest">${m.leadershipTitle}</span>` : ''}</div></div><div class="text-[9px] font-black uppercase opacity-60">${getRoleAbbr(m.role)}</div></div>`).join('')}</div>` : ''}
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        };
+
+        const renderFunctionsList = () => {
+            const container = document.getElementById('functions-container');
+            if (!container) return;
+            container.innerHTML = `<h2 class="text-4xl font-black uppercase tracking-tighter text-slate-900 mb-12">Functional Composition</h2>`;
+            Object.entries(config.compositions).forEach(([key, data]) => {
+                const funcPersonnel = personnel.filter(p => getFunctionKey(p.role) === key);
+                const hiredCount = funcPersonnel.filter(p => p.status === 'Hired').length;
+                const vacancyCount = funcPersonnel.filter(p => p.status !== 'Hired').length;
+                const targetFTE = Math.round((config.strategicGoal * data.val) / 100);
+                const currentMix = ((hiredCount / (personnel.filter(p => p.status === 'Hired').length || 1)) * 100).toFixed(1);
+                const fteGap = targetFTE - hiredCount;
+                const isDeepExpanded = expandedFunctions.includes(key);
+                const colors = { eng: 'indigo', prod: 'amber', design: 'rose', data: 'emerald' };
+                const theme = colors[key] || 'slate';
+                const seniorCount = funcPersonnel.filter(p => parseInt(p.level?.replace(/\D/g, '') || '0') >= 4).length;
+                const leadCount = funcPersonnel.filter(p => p.leadershipTitle || p.level?.startsWith('M') || p.level?.startsWith('L')).length;
+                const card = document.createElement('div');
+                card.className = "bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm mb-8 animate-in relative overflow-hidden transition-all duration-500";
+                card.innerHTML = `<div class="grid lg:grid-cols-4 gap-12 items-center"><div class="col-span-1 border-r border-slate-50 pr-8"><h3 class="text-2xl font-black uppercase tracking-tighter text-slate-900 mb-2">${data.label}</h3><div class="inline-flex items-center px-4 py-1.5 rounded-full bg-${theme}-50 text-${theme}-600 text-[10px] font-black uppercase tracking-widest">Target ${data.val}% Mix</div></div><div class="col-span-1 text-center border-r border-slate-50 pr-8"><p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Capacity Health</p><div class="flex items-center justify-center gap-4"><div><h4 class="text-3xl font-black text-slate-900">${hiredCount}</h4><span class="text-[8px] font-black text-slate-300 uppercase">Actual</span></div><div class="text-slate-200 text-xl font-thin">/</div><div><h4 class="text-3xl font-black text-slate-400">${targetFTE}</h4><span class="text-[8px] font-black text-slate-300 uppercase">Target</span></div></div></div><div class="col-span-1 text-center border-r border-slate-50 pr-8"><p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Utilization Gap</p><h4 class="text-3xl font-black ${fteGap > 0 ? 'text-red-500' : 'text-emerald-500'}">${fteGap > 0 ? '+' + fteGap : fteGap}</h4><span class="text-[8px] font-black text-slate-300 uppercase">${fteGap > 0 ? 'Hires Needed' : 'Over Capacity'}</span></div><div class="col-span-1 text-right flex flex-col items-end gap-3"><button onclick="window.toggleFunctionDeepDive('${key}')" class="bg-slate-900 text-white px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-colors shadow-lg">${isDeepExpanded ? 'Collapse Deep Dive' : 'Open Deep Dive'}</button><div class="flex gap-2"><span class="bg-slate-50 text-slate-500 px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest">${currentMix}% Current Mix</span><span class="bg-red-50 text-red-500 px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest">${vacancyCount} Open</span></div></div></div>${isDeepExpanded ? `<div class="mt-12 pt-12 border-t border-slate-50 animate-in"><div class="grid lg:grid-cols-3 gap-8 mb-12"><div class="bg-slate-50 p-6 rounded-3xl"><h5 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Seniority Distribution</h5><div class="space-y-3"><div class="flex justify-between items-center"><span class="text-[9px] font-black uppercase">Senior (IC4+)</span><span class="font-bold">${seniorCount}</span></div><div class="flex justify-between items-center"><span class="text-[9px] font-black uppercase">Leadership Titles</span><span class="font-bold text-indigo-600">${leadCount}</span></div><div class="flex justify-between items-center border-t pt-2 border-slate-200"><span class="text-[9px] font-black uppercase">Density Index</span><span class="text-indigo-600 font-black">${((seniorCount / (hiredCount || 1)) * 100).toFixed(0)}%</span></div></div></div><div class="bg-slate-50 p-6 rounded-3xl col-span-2"><h5 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Functional Deployment (Top Tribes)</h5><div class="flex flex-wrap gap-3">${[...new Set(funcPersonnel.map(p => p.tribe))].slice(0, 6).map(t => { const count = funcPersonnel.filter(p => p.tribe === t).length; return `<div class="bg-white border border-slate-200 px-4 py-2 rounded-2xl flex items-center gap-3 shadow-sm"><span class="text-[9px] font-black uppercase text-slate-900">${t}</span><span class="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-lg text-[10px] font-black">${count}</span></div>`; }).join('')}</div></div></div><h5 class="text-xl font-black uppercase tracking-tighter text-slate-900 mb-6">${data.label} Roster</h5><div class="overflow-x-auto"><table class="w-full text-left"><thead><tr class="text-[10px] font-black text-slate-300 uppercase tracking-widest border-b"><th class="pb-4">Name</th><th class="pb-4">Level</th><th class="pb-4">Tribe / Squad</th><th class="pb-4 text-right">Status</th></tr></thead><tbody>${funcPersonnel.map(m => `<tr class="border-b border-slate-50 last:border-0"><td class="py-4"><span class="font-bold text-slate-800 text-sm block">${m.name}</span>${m.leadershipTitle ? `<span class="text-[8px] font-black text-indigo-500 uppercase tracking-widest">${m.leadershipTitle}</span>` : ''}</td><td class="py-4 font-mono text-xs text-slate-400">${m.level}</td><td class="py-4"><span class="text-[10px] font-black uppercase text-slate-400 block">${m.tribe}</span>${m.secondaryTribes && m.secondaryTribes.length ? `<span class="text-[8px] text-slate-300 uppercase italic">Covers: ${m.secondaryTribes.join(', ')}</span>` : `<span class="text-[9px] font-medium text-slate-300 uppercase">${m.squad}</span>`}</td><td class="py-4 text-right"><span class="text-[10px] font-black uppercase ${m.status === 'Hired' ? 'text-emerald-500' : 'text-amber-500'}">${m.status}</span></td></tr>`).join('')}</tbody></table></div></div>` : `<div class="mt-10 h-2 bg-slate-50 rounded-full overflow-hidden"><div class="h-full bg-${theme}-500 rounded-full transition-all duration-1000" style="width: ${Math.min((hiredCount / (targetFTE || 1)) * 100, 100)}%"></div></div>`}`;
+                container.appendChild(card);
+            });
+        };
+
+        const renderTribeManage = () => {
+            const container = document.getElementById('tribe-manage-view-content');
+            if (!container || !managedTribeContext.name) return;
+            const tribeMbs = personnel.filter(p => p.tribe === managedTribeContext.name || (p.secondaryTribes && p.secondaryTribes.includes(managedTribeContext.name)));
+            const counts = getRoleCounts(tribeMbs);
+            const ratios = getLeverageRatios(tribeMbs);
+            container.innerHTML = `<div class="flex items-center gap-4 mb-10"><button onclick="window.setTab('tribes')" class="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:shadow-lg transition-all"><i class="fa-solid fa-arrow-left"></i></button><div><h2 class="text-4xl font-black uppercase tracking-tighter">${managedTribeContext.name} Orchestration</h2><p class="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">Full Tribe Management</p></div></div><div class="grid lg:grid-cols-3 gap-8 mb-12"><div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase text-indigo-500 mb-6 tracking-widest">Aggregate Leverage</h4><div class="space-y-6"><div class="flex justify-between items-end"><div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : PM</p><h3 class="text-3xl font-black">${ratios.engPm}:1</h3></div><div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.pm.min}-${config.ratios.pm.max}</div></div><div class="flex justify-between items-end pt-4 border-t border-slate-50"><div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : Design</p><h3 class="text-3xl font-black">${ratios.engPd}:1</h3></div><div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.design.min}-${config.ratios.design.max}</div></div></div></div><div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase text-emerald-500 mb-6 tracking-widest">Tribe Composition</h4><div class="grid grid-cols-2 gap-4"><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Engineering</p><h3 class="text-2xl font-black">${counts.eng}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Product</p><h3 class="text-2xl font-black">${counts.pm}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Design</p><h3 class="text-2xl font-black">${counts.pd}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Data</p><h3 class="text-2xl font-black">${counts.da}</h3></div></div></div><div class="bg-slate-900 p-10 rounded-[48px] shadow-2xl text-white"><h4 class="text-[11px] font-black uppercase opacity-40 mb-6 tracking-widest">Tribe Summary</h4><div class="space-y-4"><div class="flex justify-between border-b border-white/10 pb-4"><span class="text-[10px] uppercase opacity-60">Primary FTE</span><span class="font-black">${personnel.filter(p => p.tribe === managedTribeContext.name).length}</span></div><div class="flex justify-between border-b border-white/10 pb-4"><span class="text-[10px] uppercase opacity-60">Total Active</span><span class="font-black">${tribeMbs.length}</span></div><div class="flex justify-between pb-2"><span class="text-[10px] uppercase opacity-60">Filled Ratio</span><span class="font-black text-emerald-400">${Math.round((tribeMbs.filter(p => p.status === 'Hired').length / (tribeMbs.length || 1)) * 100)}%</span></div></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-2xl font-black uppercase tracking-tighter mb-8 text-slate-900">Tribe Master Roster</h4><div class="overflow-x-auto"><table class="w-full text-left"><thead><tr class="text-[11px] font-black text-slate-300 uppercase tracking-widest border-b border-slate-50"><th class="pb-6">Name</th><th class="pb-6">Role</th><th class="pb-6">Assignment</th><th class="pb-6">Seniority</th><th class="pb-6 text-right">Status</th></tr></thead><tbody>${tribeMbs.map(m => `<tr class="group border-b border-slate-50/50"><td class="py-5"><span class="font-bold text-slate-800 block">${m.name}</span>${m.leadershipTitle ? `<span class="text-[8px] font-black text-indigo-500 uppercase tracking-widest">${m.leadershipTitle}</span>` : ''}</td><td class="py-5"><span class="px-3 py-1 rounded-xl text-[10px] font-black uppercase ${getRoleColorClass(m.role)}">${m.role}</span></td><td class="py-5"><span class="text-[10px] font-black text-slate-400 uppercase tracking-tighter">${m.tribe === managedTribeContext.name ? m.squad : `Coverage`}</span></td><td class="py-5 font-mono text-xs text-slate-400">${m.level}</td><td class="py-5 text-right"><span class="text-[10px] font-black uppercase ${m.status === 'Hired' ? 'text-emerald-500' : 'text-amber-500'}">${m.status}</span></td></tr>`).join('')}</tbody></table></div></div>`;
+        };
+
+        const renderSquadManage = () => {
+            const container = document.getElementById('squad-manage-view-content');
+            if (!container || !managedSquadContext.squad) return;
+            const squadMbs = personnel.filter(p => p.tribe === managedSquadContext.tribe && p.squad === managedSquadContext.squad);
+            const counts = getRoleCounts(squadMbs);
+            const ratios = getLeverageRatios(squadMbs);
+            container.innerHTML = `<div class="flex items-center gap-4 mb-10"><button onclick="window.setTab('tribes')" class="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:shadow-lg transition-all"><i class="fa-solid fa-arrow-left"></i></button><div><h2 class="text-4xl font-black uppercase tracking-tighter">${managedSquadContext.squad} Dashboard</h2><p class="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">${managedSquadContext.tribe} Tribe</p></div></div><div class="grid lg:grid-cols-3 gap-8 mb-12"><div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase text-indigo-500 mb-6 tracking-widest">Leverage Ratios</h4><div class="space-y-6"><div class="flex justify-between items-end"><div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : PM</p><h3 class="text-3xl font-black">${ratios.engPm}:1</h3></div><div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.pm.min}-${config.ratios.pm.max}</div></div><div class="flex justify-between items-end pt-4 border-t border-slate-50"><div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : Design</p><h3 class="text-3xl font-black">${ratios.engPd}:1</h3></div><div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.design.min}-${config.ratios.design.max}</div></div></div></div><div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase text-emerald-500 mb-6 tracking-widest">Composition</h4><div class="grid grid-cols-2 gap-4"><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng</p><h3 class="text-2xl font-black">${counts.eng}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">PM</p><h3 class="text-2xl font-black">${counts.pm}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Design</p><h3 class="text-2xl font-black">${counts.pd}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Data</p><h3 class="text-2xl font-black">${counts.da}</h3></div></div></div><div class="bg-indigo-600 p-10 rounded-[48px] shadow-2xl shadow-indigo-100 text-white"><h4 class="text-[11px] font-black uppercase opacity-60 mb-6 tracking-widest">Orchestration</h4><p class="text-lg font-medium leading-tight mb-8">Manage squad assignments and operational health directly from this dashboard.</p><button onclick="window.openEntryModal()" class="w-full bg-white text-indigo-600 py-4 rounded-2xl font-black uppercase text-xs tracking-widest">Add New Seat</button></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-2xl font-black uppercase tracking-tighter mb-8 text-slate-900">Squad Roster</h4><div class="overflow-x-auto"><table class="w-full text-left"><thead><tr class="text-[11px] font-black text-slate-300 uppercase tracking-widest border-b border-slate-50"><th class="pb-6">Name</th><th class="pb-6">Role</th><th class="pb-6">Seniority</th><th class="pb-6 text-right">Status</th></tr></thead><tbody>${squadMbs.map(m => `<tr class="group border-b border-slate-50/50"><td class="py-5 font-bold text-slate-800"><input type="text" value="${m.name}" onchange="window.updateMemberField('${m.id}', 'name', this.value)" class="bg-transparent border-none focus:ring-0 w-full font-bold"></td><td class="py-5"><span class="px-3 py-1 rounded-xl text-[10px] font-black uppercase ${getRoleColorClass(m.role)}">${m.role}</span></td><td class="py-5 font-mono text-xs text-slate-400">${m.level}</td><td class="py-5 text-right"><div class="flex items-center justify-end gap-4"><span class="text-[10px] font-black uppercase ${m.status === 'Hired' ? 'text-emerald-500' : 'text-amber-500'}">${m.status}</span><button onclick="window.deleteHeadcount('${m.id}')" class="text-slate-200 hover:text-red-500 transition-colors"><i class="fa-solid fa-trash-can text-xs"></i></button></div></td></tr>`).join('')}</tbody></table></div></div>`;
+        };
+
+        const renderRoster = () => {
+            const tbody = document.getElementById('roster-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+            let filtered = personnel.filter(p => {
+                const matchSearch = p.name.toLowerCase().includes(rosterFilters.search.toLowerCase());
+                const matchRole = rosterFilters.role === 'all' || p.role === rosterFilters.role;
+                const matchStatus = rosterFilters.status === 'all' || p.status === rosterFilters.status;
+                return matchSearch && matchRole && matchStatus;
+            });
+            filtered.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-gray-50 text-sm border-b border-gray-50 transition-colors";
+                tr.innerHTML = `
+                    <td class="py-6 px-4"><input type="text" value="${p.name}" onchange="window.updateMemberField('${p.id}', 'name', this.value)" class="bg-transparent border-none w-full font-bold focus:ring-0 text-slate-800"><select onchange="window.updateMemberField('${p.id}', 'leadershipTitle', this.value)" class="bg-transparent border-none text-[8px] font-black uppercase text-indigo-500 block p-0 cursor-pointer"><option value="">(No Leadership Title)</option>${config.leadershipTitles.map(lt => `<option value="${lt}" ${p.leadershipTitle === lt ? 'selected' : ''}>${lt}</option>`).join('')}</select></td>
+                    <td class="py-6"><select onchange="window.updateMemberField('${p.id}', 'role', this.value)" class="bg-slate-50 border-none rounded-xl text-[10px] font-black uppercase px-3 py-1">${config.roles.map(r => `<option value="${r}" ${p.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+                    <td class="py-6"><select onchange="window.updateMemberField('${p.id}', 'level', this.value)" class="bg-transparent border-none font-mono text-xs text-slate-400"><option value="">N/A</option>${config.levels.map(l => `<option value="${l}" ${p.level === l ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
+                    <td class="py-6"><select onchange="window.updateMemberField('${p.id}', 'squad', this.value)" class="bg-slate-50 border-none rounded-xl text-indigo-600 font-black text-[10px] px-3 py-1 mb-1">${tribes.flatMap(t => t.squads).map(s => `<option value="${s}" ${p.squad === s ? 'selected' : ''}>${s}</option>`).join('')}</select><div class="flex flex-col gap-1"><label class="text-[7px] font-black uppercase text-slate-300">Covers Tribes:</label><input type="text" placeholder="Add Tribes..." value="${(p.secondaryTribes || []).join(', ')}" onchange="window.updateMemberField('${p.id}', 'secondaryTribes', this.value)" class="bg-transparent border border-slate-100 rounded text-[8px] p-1 font-bold text-slate-500 w-full focus:ring-0"></div></td>
+                    <td class="py-6 text-right px-4"><div class="flex items-center justify-end gap-4"><select onchange="window.updateMemberField('${p.id}', 'status', this.value)" class="bg-transparent border-none text-[10px] font-black uppercase ${p.status === 'Hired' ? 'text-emerald-500' : 'text-amber-500'}"><option value="Hired" ${p.status === 'Hired' ? 'selected' : ''}>Hired</option><option value="Hiring" ${p.status === 'Hiring' ? 'selected' : ''}>Hiring</option><option value="Open" ${p.status === 'Open' ? 'selected' : ''}>Open</option></select><button onclick="window.deleteHeadcount('${p.id}')" class="text-slate-200 hover:text-red-500 transition-colors"><i class="fa-solid fa-trash-can text-xs"></i></button></div></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        };
+
+        const renderInsights = () => {
+            const container = document.getElementById('insights-view-content');
+            if (!container) return;
+            let filtered = viewContext === 'hired' ? personnel.filter(p => p.status === 'Hired') : personnel;
+            if (insightFilters.tribes.length > 0) filtered = filtered.filter(p => insightFilters.tribes.includes(p.tribe));
+            if (insightFilters.squads.length > 0) filtered = filtered.filter(p => insightFilters.squads.includes(p.squad));
+            const total = filtered.length || 1;
+            const rC = getRoleCounts(filtered);
+            const r = getLeverageRatios(filtered);
+            const leaders = filtered.filter(p => p.leadershipTitle || p.level.startsWith('L') || p.level.startsWith('M')).length;
+            container.innerHTML = `<div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12"><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Tribe Selection</h4><div class="flex flex-wrap gap-2">${tribes.map(t => `<button onclick="window.toggleInsightFilter('tribes', '${t.name}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.tribes.includes(t.name) ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${t.name}</button>`).join('')}</div></div><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Squad Selection</h4><div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto no-scrollbar">${tribes.flatMap(t => t.squads).map(s => `<button onclick="window.toggleInsightFilter('squads', '${s}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.squads.includes(s) ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${s}</button>`).join('')}</div></div></div><div class="grid lg:grid-cols-3 gap-10 mb-12"><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-indigo-500 mb-8 tracking-widest">Engineering Leverage</h4><div class="space-y-6"><div><h3 class="text-4xl font-black">${r.engPm}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PM (Target ${config.ratios.pm.min}:1 - ${config.ratios.pm.max}:1)</p></div><div class="pt-4 border-t border-slate-50"><h3 class="text-4xl font-black">${r.engPd}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PD (Target ${config.ratios.design.min}:1 - ${config.ratios.design.max}:1)</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-emerald-500 mb-8 tracking-widest">Composition Mix</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${((rC.eng/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Eng Share</p></div><div class="text-right"><h3 class="text-4xl font-black">${((rC.pm/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Product Share</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-orange-500 mb-8 tracking-widest">Bench Strength</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${leaders}</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Leaders</p></div><div class="text-right"><h3 class="text-4xl font-black">${((leaders/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Density Mix</p></div></div></div></div>`;
+        };
+
+        const renderHeaderStats = () => {
+            const filled = personnel.filter(p => p.status === 'Hired').length;
+            const goal = config.strategicGoal || 1;
+            const stats = { 'stat-filled': filled, 'stat-capacity': Math.round((filled / goal) * 100) + '%', 'stat-vacancy': personnel.filter(p => p.status !== 'Hired').length, 'stat-goal': goal, 'header-filled-count': filled, 'header-goal-count': goal };
+            Object.entries(stats).forEach(([id, val]) => { const el = document.getElementById(id); if (el) el.textContent = val; });
+        };
+
+        const refreshDashboard = () => {
+            renderHeaderStats();
+            document.querySelectorAll('.tab-view').forEach(v => v.classList.add('hidden'));
+            const activeView = document.getElementById(`${activeTab}-view`);
+            if (activeView) activeView.classList.remove('hidden');
+            document.querySelectorAll('.nav-tab').forEach(el => { 
+                el.classList.toggle('active-tab', el.dataset.tab === activeTab); 
+                el.classList.toggle('text-slate-400', el.dataset.tab !== activeTab); 
+            });
+            if (activeTab === 'summary') renderSummary(); 
+            if (activeTab === 'tribes') renderTribeList();
+            if (activeTab === 'functions') renderFunctionsList();
+            if (activeTab === 'roster') renderRoster();
+            if (activeTab === 'insights') renderInsights();
+            if (activeTab === 'config') renderConfig();
+            if (activeTab === 'squad-manage') renderSquadManage();
+            if (activeTab === 'tribe-manage') renderTribeManage();
+        };
+
+        const renderConfig = () => {
+            const container = document.getElementById('config-view-content');
+            if (!container) return;
+            container.innerHTML = `
+                <div class="grid lg:grid-cols-2 gap-10">
+                    <div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm">
+                        <h2 class="text-3xl font-black uppercase mb-10 text-slate-900">Global Strategy</h2>
+                        <div class="space-y-12">
+                            <div><label class="text-[10px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Global FTE Goal</label><input id="config-goal-input" type="number" value="${config.strategicGoal}" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 text-2xl font-black" onchange="window.updateConfig('strategicGoal', this.value)"></div>
+                            <div><h4 class="text-[11px] font-black uppercase mb-6 tracking-widest text-indigo-500">Ratio Targets (Eng : X)</h4><div class="grid grid-cols-1 sm:grid-cols-3 gap-6">${Object.entries(config.ratios).map(([key, data]) => `<div><label class="text-[9px] font-black text-slate-400 uppercase block mb-2">${data.label}</label><div class="flex gap-2"><input type="number" placeholder="Min" value="${data.min}" class="w-1/2 bg-slate-50 border-none rounded-xl px-4 py-3 font-black text-sm" onchange="window.updateNestedConfig('ratios', '${key}', 'min', this.value)"><input type="number" placeholder="Max" value="${data.max}" class="w-1/2 bg-slate-50 border-none rounded-xl px-4 py-3 font-black text-sm" onchange="window.updateNestedConfig('ratios', '${key}', 'max', this.value)"></div></div>`).join('')}</div></div>
+                            <div><h4 class="text-[11px] font-black uppercase mb-6 tracking-widest text-emerald-500">Composition Mix (%)</h4><div class="grid grid-cols-2 sm:grid-cols-4 gap-6">${Object.entries(config.compositions).map(([key, data]) => `<div><label class="text-[9px] font-black text-slate-400 uppercase block mb-2">${data.label}</label><input type="number" value="${data.val}" class="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-black text-sm" onchange="window.updateNestedConfig('compositions', '${key}', 'val', this.value)"></div>`).join('')}</div></div>
+                            <div class="pt-8 border-t border-slate-50">
+                                <h4 class="text-[11px] font-black uppercase mb-6 tracking-widest">Job Schema</h4>
+                                <div class="space-y-8">
+                                    <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-indigo-500 uppercase">Leadership Titles</p><button onclick="window.addConfigItem('leadershipTitles')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${config.leadershipTitles.map(r => `<span class="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${r}<i onclick="window.removeConfigItem('leadershipTitles', '${r}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
+                                    <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-slate-900 uppercase">Job Families</p><button onclick="window.addConfigItem('roles')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${config.roles.map(r => `<span class="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${r}<i onclick="window.removeConfigItem('roles', '${r}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
+                                    <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-slate-500 uppercase">Seniority Levels</p><button onclick="window.addConfigItem('levels')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${config.levels.map(l => `<span class="bg-slate-100 text-slate-500 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${l}<i onclick="window.removeConfigItem('levels', '${l}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm">
+                        <div class="flex justify-between items-center mb-10"><h2 class="text-3xl font-black uppercase text-slate-900">Organization Tree</h2><button onclick="window.addTribe()" class="bg-slate-900 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest">New Tribe</button></div>
+                        <div class="space-y-6">
+                            ${tribes.map(t => `
+                                <div class="bg-slate-50 p-8 rounded-[32px] border border-slate-100">
+                                    <div class="flex justify-between items-start mb-4">
+                                        <div>
+                                            <input type="text" value="${t.name}" onchange="window.updateTribeName('${t.id}', '${t.name}', this.value)" class="bg-transparent border-none p-0 focus:ring-0 text-lg font-black uppercase text-slate-900 w-full max-w-[200px] mb-2">
+                                            <select onchange="window.updateTribeField('${t.id}', 'category', this.value)" class="bg-white border-slate-200 rounded-lg text-[8px] font-black uppercase text-indigo-500 px-2 py-1 cursor-pointer">
+                                                ${['Unassigned', 'Feature', 'Platform', 'Data'].map(cat => `<option value="${cat}" ${t.category === cat ? 'selected' : ''}>${cat}</option>`).join('')}
+                                            </select>
+                                        </div>
+                                        <div class="flex gap-4">
+                                            <button onclick="window.addSquad('${t.id}', ${JSON.stringify(t.squads).replace(/"/g, '&quot;')})" class="text-[10px] font-black text-indigo-600">ADD SQUAD</button>
+                                            <button onclick="window.deleteTribe('${t.id}')" class="text-red-400 hover:scale-110 transition-transform"><i class="fa-solid fa-trash-can"></i></button>
+                                        </div>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2">${t.squads.map(s => `<span class="bg-white border border-slate-100 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 shadow-sm"><input type="text" value="${s}" onchange="window.updateSquadName('${t.id}', '${t.name}', '${s}', this.value, ${JSON.stringify(t.squads).replace(/"/g, '&quot;')})" class="bg-transparent border-none p-0 focus:ring-0 text-[10px] font-black uppercase text-slate-700 w-24"><div class="flex items-center gap-2 ml-1"><i onclick="window.moveSquad('${t.id}', '${t.name}', '${s}', ${JSON.stringify(t.squads).replace(/"/g, '&quot;')})" class="fa-solid fa-right-left cursor-pointer opacity-20 hover:opacity-100 hover:text-indigo-600"></i><i onclick="window.deleteSquad('${t.id}', '${s}', ${JSON.stringify(t.squads).replace(/"/g, '&quot;')})" class="fa-solid fa-times cursor-pointer opacity-20 hover:opacity-100 hover:text-red-500"></i></div></span>`).join('')}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        onAuthStateChanged(auth, (u) => { 
+            user = u; 
+            if (!loginScreen) initDOMElements(); 
+            if (user) { 
+                loginScreen.classList.add('hidden'); 
+                initListeners(); 
+            } else { 
+                loginScreen.classList.remove('hidden'); 
+                appDashboard.classList.add('hidden'); 
+                emptyState.classList.add('hidden'); 
+            } 
+            if (loadingOverlay) loadingOverlay.classList.add('hidden'); 
+        });
+
+        window.addEventListener('DOMContentLoaded', () => { 
+            initDOMElements(); 
+            document.getElementById('login-btn').addEventListener('click', () => signInWithPopup(auth, provider)); 
+            document.getElementById('guest-btn').addEventListener('click', () => signInAnonymously(auth)); 
+            document.getElementById('logout-btn').addEventListener('click', () => signOut(auth)); 
+            document.getElementById('add-entry-form').addEventListener('submit', (e) => { 
+                e.preventDefault(); 
+                const formData = new FormData(e.target); 
+                window.addNewHeadcount(Object.fromEntries(formData)); 
+            }); 
+        });
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #F8FAFC; -webkit-font-smoothing: antialiased; }
+        .active-tab { color: #4f46e5; background: #ffffff; border-radius: 18px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .nav-tab { transition: all 0.3s ease; cursor: pointer; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 10px; }
+        .animate-in { animation: fadeIn 0.4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="min-h-screen text-slate-900 overflow-x-hidden">
+
+    <div id="loading-overlay" class="fixed inset-0 bg-white flex items-center justify-center z-[100] hidden">
+        <div class="animate-pulse flex flex-col items-center">
+            <div class="w-20 h-20 bg-indigo-600 rounded-[32px] mb-8 shadow-2xl flex items-center justify-center text-white text-3xl"><i class="fa-solid fa-layer-group"></i></div>
+            <p class="text-[12px] font-black text-slate-400 uppercase tracking-[0.3em]">Synchronizing data...</p>
+        </div>
+    </div>
+
+    <!-- ENTRY MODAL -->
+    <div id="entry-modal" class="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[110] flex items-center justify-center p-6 hidden">
+        <div class="bg-white w-full max-w-xl rounded-[48px] p-12 shadow-2xl animate-in max-h-[90vh] overflow-y-auto no-scrollbar">
+            <div class="flex justify-between items-center mb-8"><h2 class="text-3xl font-black uppercase text-slate-900">Add Headcount</h2><button onclick="window.closeEntryModal()" class="text-slate-400 hover:text-slate-900"><i class="fa-solid fa-times text-xl"></i></button></div>
+            <form id="add-entry-form" class="space-y-6">
+                <div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Full Name</label><input name="name" type="text" placeholder="John Doe" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold" required></div>
+                <div class="grid grid-cols-2 gap-6"><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Role</label><select name="role" id="modal-role-select" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></select></div><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Level</label><select name="level" id="modal-level-select" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></select></div></div>
+                <div class="grid grid-cols-2 gap-6"><div><label class="text-[10px] font-black text-indigo-500 uppercase mb-2 block tracking-widest">Leadership Title</label><select name="leadershipTitle" id="modal-ltitle-select" class="w-full bg-indigo-50 border-none rounded-2xl px-6 py-4 font-bold text-indigo-600"></select></div><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Additional Tribes Covered (CSV)</label><input name="secondaryTribes" type="text" placeholder="Tribe A, Tribe B" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></div></div>
+                <div class="grid grid-cols-2 gap-6"><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Primary Tribe</label><select name="tribe" id="modal-tribe-select" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></select></div><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Squad</label><select name="squad" id="modal-squad-select" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></select></div></div>
+                <div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Status</label><select name="status" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"><option value="Open" selected>Open (Proposed)</option><option value="Hiring">Hiring (Active)</option><option value="Hired">Hired</option></select></div>
+                <div class="flex gap-4 pt-6"><button type="button" onclick="window.closeEntryModal()" class="flex-1 py-4 px-8 rounded-3xl font-black uppercase text-xs text-slate-400 bg-slate-50">Cancel</button><button type="submit" class="flex-[2] py-4 px-8 rounded-3xl font-black uppercase text-xs text-white bg-indigo-600 shadow-xl shadow-indigo-100">Create Entry</button></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MAIN DASHBOARD -->
+    <div id="app-dashboard" class="hidden">
+        <nav class="fixed top-0 left-0 w-full bg-white/90 backdrop-blur-xl border-b border-slate-100 h-28 px-12 flex items-center justify-between z-50">
+            <div class="flex items-center gap-8">
+                <div class="w-14 h-14 bg-indigo-600 rounded-[22px] flex items-center justify-center text-white shadow-2xl shadow-indigo-200"><i class="fa-solid fa-layer-group text-xl"></i></div>
+                <div class="hidden lg:block"><h2 class="text-2xl font-black uppercase text-slate-900">Commander</h2><p class="text-[10px] font-black text-slate-400 uppercase mt-2 tracking-widest">Active Strategy • <span id="header-filled-count" class="text-indigo-600">0</span>/<span id="header-goal-count">0</span> Filled</p></div>
+            </div>
+            <div class="flex items-center gap-3 bg-slate-100/50 p-2 rounded-[24px]">
+                <div onclick="window.setTab('summary')" data-tab="summary" class="nav-tab active-tab px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Summary</div>
+                <div onclick="window.setTab('tribes')" data-tab="tribes" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Tribes</div>
+                <div onclick="window.setTab('functions')" data-tab="functions" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Functions</div>
+                <div onclick="window.setTab('roster')" data-tab="roster" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Roster</div>
+                <div onclick="window.setTab('insights')" data-tab="insights" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Insights</div>
+                <div onclick="window.setTab('config')" data-tab="config" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Config</div>
+            </div>
+            <div class="flex items-center gap-6"><button onclick="window.openEntryModal()" class="bg-indigo-600 text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-indigo-100">New Entry</button><button id="logout-btn" class="w-12 h-12 rounded-2xl bg-slate-50 text-slate-400 hover:text-red-500 flex items-center justify-center transition-colors"><i class="fa-solid fa-right-from-bracket text-sm"></i></button></div>
+        </nav>
+
+        <main class="pt-40 pb-24 px-12 max-w-[1800px] mx-auto">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+                <div class="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex items-center gap-4 group transition-all hover:border-indigo-100"><div class="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-lg transition-transform group-hover:scale-110"><i class="fa-solid fa-user-group"></i></div><div><p class="text-[8px] font-black text-slate-400 uppercase tracking-widest">Filled FTE</p><h3 id="stat-filled" class="text-2xl font-black tracking-tighter">0</h3></div></div>
+                <div class="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex items-center gap-4 group transition-all hover:border-amber-100"><div class="w-12 h-12 bg-orange-50 text-orange-600 rounded-2xl flex items-center justify-center text-lg transition-transform group-hover:scale-110"><i class="fa-solid fa-bullseye"></i></div><div><p class="text-[8px] font-black text-slate-400 uppercase tracking-widest">Strategic Goal</p><h3 id="stat-goal" class="text-2xl font-black tracking-tighter">0</h3></div></div>
+                <div class="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex items-center gap-4 group transition-all hover:border-emerald-100"><div class="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center text-lg transition-transform group-hover:scale-110"><i class="fa-solid fa-trophy"></i></div><div><p class="text-[9px] font-black text-slate-400 uppercase tracking-widest">Capacity</p><h3 id="stat-capacity" class="text-2xl font-black tracking-tighter">0%</h3></div></div>
+                <div class="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex items-center gap-4 group transition-all hover:border-rose-100"><div class="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-lg transition-transform group-hover:scale-110"><i class="fa-solid fa-clock"></i></div><div><p class="text-[9px] font-black text-slate-400 uppercase tracking-widest">Vacancies</p><h3 id="stat-vacancy" class="text-2xl font-black tracking-tighter">0</h3></div></div>
+            </div>
+            <div id="summary-view" class="tab-view"><div id="summary-container"></div></div>
+            <div id="tribes-view" class="tab-view hidden"><div id="tribes-container"></div></div>
+            <div id="functions-view" class="tab-view hidden"><div id="functions-container"></div></div>
+            <div id="tribe-manage-view" class="tab-view hidden"><div id="tribe-manage-view-content"></div></div>
+            <div id="squad-manage-view" class="tab-view hidden"><div id="squad-manage-view-content"></div></div>
+            <div id="insights-view" class="tab-view hidden"><div id="insights-view-content"></div></div>
+            <div id="config-view" class="tab-view hidden"><div id="config-view-content"></div></div>
+            <div id="roster-view" class="tab-view hidden"><div class="bg-white rounded-[56px] p-16 border border-slate-100 shadow-sm"><div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 mb-12"><h2 class="text-4xl font-black uppercase text-slate-900 tracking-tighter">Master Roster</h2><div class="flex flex-wrap items-center gap-4 w-full lg:w-auto"><div class="relative flex-1 lg:min-w-[300px]"><i class="fa-solid fa-magnifying-glass absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 text-sm"></i><input type="text" placeholder="Search..." oninput="window.updateRosterFilter('search', this.value)" class="w-full bg-slate-50 border-none rounded-2xl pl-14 pr-6 py-4 font-bold text-sm focus:ring-2 focus:ring-indigo-100 transition-all"></div><select onchange="window.updateRosterFilter('role', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer"><option value="all">All Roles</option><option value="Engineering">Engineering</option><option value="Product Management">Product Management</option><option value="Product Design">Product Design</option><option value="Data Science">Data Science</option></select><select onchange="window.updateRosterFilter('status', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer"><option value="all">All Status</option><option value="Hired">Hired</option><option value="Hiring">Hiring</option><option value="Open">Open</option></select><button onclick="window.openEntryModal()" class="bg-slate-900 text-white px-8 py-4 rounded-3xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-slate-100 hover:scale-105 active:scale-95 transition-all">Add Headcount</button></div></div><div class="overflow-x-auto no-scrollbar"><table class="w-full text-left"><thead><tr class="text-[12px] font-black text-slate-400 uppercase tracking-[0.25em] border-b border-slate-50"><th class="pb-10 px-4">Full Name & Leadership</th><th class="pb-10">Role</th><th class="pb-10">Level</th><th class="pb-10">Squad & Coverage</th><th class="pb-10 text-right px-4">Action</th></tr></thead><tbody id="roster-table-body"></tbody></table></div></div></div>
+        </main>
+    </div>
+
+    <!-- COLD START SETUP -->
+    <div id="login-screen" class="hidden min-h-screen flex flex-col items-center justify-center p-6 bg-slate-950">
+        <div class="max-w-md w-full text-center space-y-16"><div class="inline-flex p-8 rounded-[48px] bg-indigo-600/10 text-indigo-500 border border-indigo-600/10 shadow-2xl"><i class="fa-solid fa-users-gear text-6xl"></i></div><h1 class="text-6xl font-black text-white tracking-tighter leading-[0.9]">HEADCOUNT<br><span class="text-indigo-500">COMMANDER</span></h1><div class="space-y-5"><button id="login-btn" class="w-full py-6 px-10 bg-white text-slate-950 font-black rounded-[28px] flex items-center justify-center gap-5 hover:bg-slate-100 transition-all uppercase text-sm tracking-widest shadow-2xl">Sign in with Google</button><button id="guest-btn" class="w-full py-5 px-8 bg-slate-900 text-slate-400 border border-slate-800 font-black rounded-[28px] hover:text-white transition-all uppercase text-[11px] tracking-[0.3em]">Guest Access</button></div></div>
+    </div>
+    <div id="empty-state-setup" class="hidden min-h-screen flex flex-col items-center justify-center p-12 bg-[#F8FAFC]">
+        <div class="max-w-2xl w-full bg-white rounded-[64px] p-16 border border-slate-100 shadow-2xl text-center"><div class="w-24 h-24 bg-indigo-50 text-indigo-600 rounded-[32px] flex items-center justify-center text-4xl mx-auto mb-10"><i class="fa-solid fa-cloud-upload"></i></div><h2 class="text-4xl font-black uppercase text-slate-900 mb-4 tracking-tighter">Initialize Organization</h2><p class="text-slate-500 font-medium mb-12 text-lg">Upload headcount snapshot (CSV) to begin.</p><label class="block"><span class="bg-indigo-600 text-white px-10 py-5 rounded-[28px] text-xs font-black uppercase tracking-widest block text-center cursor-pointer hover:bg-indigo-700 shadow-xl shadow-indigo-100">Upload CSV Snapshot</span><input type="file" accept=".csv" onchange="window.handleFileUpload(event)" class="hidden"></label></div>
+    </div>
+</body>
+</html>
