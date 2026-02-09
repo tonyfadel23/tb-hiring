@@ -51,12 +51,12 @@
                 data: { min: 10, max: 15, label: "Eng : Data" }
             },
             compositions: {
-                eng: { val: 65, label: "Engineering" },
+                eng: { val: 65, label: "Eng" },
                 prod: { val: 15, label: "Product Management" },
                 design: { val: 12, label: "Product Design" },
                 data: { val: 8, label: "Data & Insights" }
             },
-            roles: ["Engineering", "Product Management", "Product Design", "Data Science", "Data Engineering"],
+            roles: ["Eng", "Product Management", "Product Design", "Data Science", "Data Engineering"],
             levels: ["IC1", "IC2", "IC3", "IC4", "IC5", "M1", "M2", "M3", "M4"],
             leadershipTitles: ["Tribe Lead", "Function Head", "Group Lead", "Lead"]
         };
@@ -75,6 +75,7 @@
         let rosterFilters = { search: '', role: 'all', status: 'all', tribe: 'all', squad: 'all', sortBy: 'name', sortOrder: 'asc' };
         let squadManageFilters = { search: '', sortBy: 'name', sortOrder: 'asc' };
         let tribeManageFilters = { search: '', sortBy: 'name', sortOrder: 'asc' };
+        let selectedRosterIds = new Set(); // Track selected personnel IDs for bulk actions
 
         // Firestore Access Helpers
         const getConfigDoc = () => doc(db, 'artifacts', appId, 'public', 'data', 'config', 'settings');
@@ -600,9 +601,23 @@
             refreshDashboard();
         };
 
+        // Debounce timers for search inputs
+        let rosterSearchTimeout;
+        let squadSearchTimeout;
+        let tribeSearchTimeout;
+
         window.updateRosterFilter = (key, val) => {
             rosterFilters[key] = val;
-            renderRoster();
+            
+            // Debounce search input, but not dropdowns
+            if (key === 'search') {
+                clearTimeout(rosterSearchTimeout);
+                rosterSearchTimeout = setTimeout(() => {
+                    renderRoster();
+                }, 300); // 300ms delay
+            } else {
+                renderRoster();
+            }
         };
 
         window.toggleRosterSort = () => {
@@ -616,7 +631,16 @@
 
         window.updateSquadManageFilter = (key, val) => {
             squadManageFilters[key] = val;
-            renderSquadManage();
+            
+            // Debounce search input
+            if (key === 'search') {
+                clearTimeout(squadSearchTimeout);
+                squadSearchTimeout = setTimeout(() => {
+                    renderSquadManage();
+                }, 300);
+            } else {
+                renderSquadManage();
+            }
         };
 
         window.toggleSquadManageSort = () => {
@@ -630,7 +654,16 @@
 
         window.updateTribeManageFilter = (key, val) => {
             tribeManageFilters[key] = val;
-            renderTribeManage();
+            
+            // Debounce search input
+            if (key === 'search') {
+                clearTimeout(tribeSearchTimeout);
+                tribeSearchTimeout = setTimeout(() => {
+                    renderTribeManage();
+                }, 300);
+            } else {
+                renderTribeManage();
+            }
         };
 
         window.toggleTribeManageSort = () => {
@@ -640,6 +673,113 @@
                 icon.className = tribeManageFilters.sortOrder === 'asc' ? 'fa-solid fa-arrow-down-a-z text-sm' : 'fa-solid fa-arrow-up-z-a text-sm';
             }
             renderTribeManage();
+        };
+
+        // Bulk action functions
+        window.toggleRosterSelection = (id) => {
+            if (selectedRosterIds.has(id)) {
+                selectedRosterIds.delete(id);
+            } else {
+                selectedRosterIds.add(id);
+            }
+            renderRoster();
+        };
+
+        window.toggleAllRosterSelection = () => {
+            const visiblePersonnel = getFilteredRosterPersonnel();
+            if (selectedRosterIds.size === visiblePersonnel.length) {
+                selectedRosterIds.clear();
+            } else {
+                selectedRosterIds.clear();
+                visiblePersonnel.forEach(p => selectedRosterIds.add(p.id));
+            }
+            renderRoster();
+        };
+
+        window.clearRosterSelection = () => {
+            selectedRosterIds.clear();
+            renderRoster();
+        };
+
+        window.applyBulkUpdate = async (field, value) => {
+            if (selectedRosterIds.size === 0) {
+                alert('No people selected. Please select people using the checkboxes.');
+                return;
+            }
+
+            const count = selectedRosterIds.size;
+            const confirmation = confirm(`Update ${field} to "${value}" for ${count} selected ${count === 1 ? 'person' : 'people'}?`);
+            
+            if (!confirmation) return;
+
+            setLoading(true);
+            try {
+                const updates = Array.from(selectedRosterIds).map(async (id) => {
+                    const updateData = {};
+                    
+                    if (field === 'tribe') {
+                        updateData.tribe = value;
+                        // Reset squad when changing tribe
+                        const newTribe = tribes.find(t => t.name === value);
+                        updateData.squad = newTribe?.squads?.[0] || 'Unassigned';
+                    } else if (field === 'squad') {
+                        updateData.squad = value;
+                    } else {
+                        updateData[field] = value;
+                    }
+
+                    return updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'personnel', id), updateData);
+                });
+
+                await Promise.all(updates);
+                await logChange('Bulk Update', `Updated ${field} to "${value}" for ${count} ${count === 1 ? 'person' : 'people'}`);
+                
+                selectedRosterIds.clear();
+            } catch (err) {
+                console.error(err);
+                alert('Failed to apply bulk update: ' + err.message);
+            }
+            setLoading(false);
+        };
+
+        const getFilteredRosterPersonnel = () => {
+            let filtered = personnel.filter(p => {
+                const searchTerm = rosterFilters.search.toLowerCase();
+                const matchSearch = 
+                    p.name.toLowerCase().includes(searchTerm) ||
+                    (p.tribe || '').toLowerCase().includes(searchTerm) ||
+                    (p.squad || '').toLowerCase().includes(searchTerm) ||
+                    (p.role || '').toLowerCase().includes(searchTerm) ||
+                    (p.leadershipTitle || '').toLowerCase().includes(searchTerm);
+                
+                const matchRole = rosterFilters.role === 'all' || p.role === rosterFilters.role;
+                const matchStatus = rosterFilters.status === 'all' || p.status === rosterFilters.status;
+                const matchTribe = rosterFilters.tribe === 'all' || p.tribe === rosterFilters.tribe;
+                const matchSquad = rosterFilters.squad === 'all' || p.squad === rosterFilters.squad;
+                
+                return matchSearch && matchRole && matchStatus && matchTribe && matchSquad;
+            });
+
+            // Apply sorting
+            filtered.sort((a, b) => {
+                let aVal, bVal;
+                switch(rosterFilters.sortBy) {
+                    case 'name': aVal = (a.name || '').toLowerCase(); bVal = (b.name || '').toLowerCase(); break;
+                    case 'role': aVal = (a.role || '').toLowerCase(); bVal = (b.role || '').toLowerCase(); break;
+                    case 'tribe': aVal = (a.tribe || '').toLowerCase(); bVal = (b.tribe || '').toLowerCase(); break;
+                    case 'squad': aVal = (a.squad || '').toLowerCase(); bVal = (b.squad || '').toLowerCase(); break;
+                    case 'status': aVal = (a.status || '').toLowerCase(); bVal = (b.status || '').toLowerCase(); break;
+                    default: aVal = (a.name || '').toLowerCase(); bVal = (b.name || '').toLowerCase();
+                }
+                
+                if (rosterFilters.sortOrder === 'asc') {
+                    return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+                } else {
+                    return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
+                }
+            });
+
+            return filtered;
         };
 
         window.toggleInsightFilter = (key, val) => {
@@ -667,18 +807,38 @@
             
             document.getElementById('edit-person-id').value = id;
             document.getElementById('edit-person-name').value = person.name || '';
-            document.getElementById('edit-person-role').value = person.role || '';
+            
+            // Populate and select role dropdown
+            const roleSelect = document.getElementById('edit-person-role');
+            roleSelect.innerHTML = config.roles.map(r => `<option value="${r}">${r}</option>`).join('');
+            roleSelect.value = person.role || config.roles[0];
+            
             document.getElementById('edit-person-level').value = person.level || '';
-            document.getElementById('edit-person-tribe').value = person.tribe || '';
+            
+            // Populate and select tribe dropdown
+            const tribeSelect = document.getElementById('edit-person-tribe');
+            tribeSelect.innerHTML = tribes.map(t => `<option value="${t.name}">${t.name}</option>`).join('');
+            tribeSelect.value = person.tribe || tribes[0]?.name || '';
             
             // Update squad dropdown based on tribe
             const tribe = tribes.find(t => t.name === person.tribe);
             const squadSelect = document.getElementById('edit-person-squad');
-            squadSelect.innerHTML = (tribe?.squads || []).map(s => `<option value="${s}" ${person.squad === s ? 'selected' : ''}>${s}</option>`).join('');
+            squadSelect.innerHTML = (tribe?.squads || []).map(s => `<option value="${s}">${s}</option>`).join('');
+            squadSelect.value = person.squad || (tribe?.squads?.[0] || '');
             
             document.getElementById('edit-person-status').value = person.status || 'Open';
             document.getElementById('edit-person-leadership').value = person.leadershipTitle || '';
-            document.getElementById('edit-person-secondary').value = (person.secondaryTribes || []).join(', ');
+            
+            // Populate and select secondary tribes (multi-select)
+            const secondarySelect = document.getElementById('edit-person-secondary');
+            const currentTribe = person.tribe;
+            const secondaryTribes = person.secondaryTribes || [];
+            
+            // Show all tribes except the primary one
+            secondarySelect.innerHTML = tribes
+                .filter(t => t.name !== currentTribe)
+                .map(t => `<option value="${t.name}" ${secondaryTribes.includes(t.name) ? 'selected' : ''}>${t.name}</option>`)
+                .join('');
             
             modal.classList.remove('hidden');
         };
@@ -693,6 +853,10 @@
             const status = document.getElementById('edit-person-status').value;
             const person = personnel.find(p => p.id === id);
             
+            // Get selected secondary tribes from multi-select
+            const secondarySelect = document.getElementById('edit-person-secondary');
+            const selectedSecondary = Array.from(secondarySelect.selectedOptions).map(option => option.value);
+            
             const updates = {
                 name: document.getElementById('edit-person-name').value,
                 role: document.getElementById('edit-person-role').value,
@@ -701,7 +865,7 @@
                 squad: status === 'Resigned' ? 'Resigned' : document.getElementById('edit-person-squad').value,
                 status: status,
                 leadershipTitle: document.getElementById('edit-person-leadership').value,
-                secondaryTribes: document.getElementById('edit-person-secondary').value.split(',').map(t => t.trim()).filter(t => t)
+                secondaryTribes: selectedSecondary
             };
             
             setLoading(true);
@@ -776,7 +940,45 @@
                 
                 const workbook = XLSX.utils.book_new();
                 
-                // Create a sheet for each tribe
+                // Create summary sheet FIRST
+                const summaryData = [
+                    ['Tribe Summary Report'],
+                    ['Generated', new Date().toLocaleString()],
+                    [],
+                    ['Tribe', 'Total Headcount', 'Hired', 'Open', 'Hiring', 'Fill Rate']
+                ];
+                
+                tribes.forEach(tribe => {
+                    const tribePersonnel = personnel.filter(p => p.tribe === tribe.name && p.status !== 'Resigned');
+                    const hired = tribePersonnel.filter(p => p.status === 'Hired').length;
+                    const open = tribePersonnel.filter(p => p.status === 'Open').length;
+                    const hiring = tribePersonnel.filter(p => p.status === 'Hiring').length;
+                    const fillRate = tribePersonnel.length > 0 ? Math.round((hired / tribePersonnel.length) * 100) : 0;
+                    
+                    summaryData.push([
+                        tribe.name,
+                        tribePersonnel.length,
+                        hired,
+                        open,
+                        hiring,
+                        `${fillRate}%`
+                    ]);
+                });
+                
+                const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+                summarySheet['!cols'] = [
+                    { wch: 25 },
+                    { wch: 18 },
+                    { wch: 12 },
+                    { wch: 12 },
+                    { wch: 12 },
+                    { wch: 12 }
+                ];
+                
+                // Add summary sheet FIRST
+                XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
+                
+                // Then create a sheet for each tribe
                 tribes.forEach(tribe => {
                     const tribePersonnel = personnel.filter(p => p.tribe === tribe.name && p.status !== 'Resigned');
                     
@@ -821,6 +1023,23 @@
                         data.push(row);
                     });
                     
+                    // Add empty row for spacing
+                    data.push([]);
+                    
+                    // Add TOTAL FTE row
+                    const totalRow = ['TOTAL FTEs'];
+                    squads.forEach(squad => {
+                        const squadCount = tribePersonnel.filter(p => p.squad === squad && p.status === 'Hired').length;
+                        totalRow.push(squadCount);
+                    });
+                    data.push(totalRow);
+                    
+                    // Add overall tribe total
+                    data.push([]);
+                    const tribeTotalHired = tribePersonnel.filter(p => p.status === 'Hired').length;
+                    const tribeTotalAll = tribePersonnel.length;
+                    data.push([`${tribe.name} Total:`, `${tribeTotalHired} Hired / ${tribeTotalAll} Total`]);
+                    
                     // Create worksheet from data
                     const worksheet = XLSX.utils.aoa_to_sheet(data);
                     
@@ -830,7 +1049,12 @@
                     worksheet['!cols'] = colWidths;
                     
                     // Set row heights for wrapped text
-                    worksheet['!rows'] = data.map(() => ({ hpt: 60 }));
+                    worksheet['!rows'] = data.map((row, idx) => {
+                        // Regular data rows get taller height for wrapped text
+                        if (idx === 0) return { hpt: 20 }; // Header
+                        if (idx > roles.length && idx < data.length - 2) return { hpt: 25 }; // Total rows
+                        return { hpt: 60 }; // Data rows
+                    });
                     
                     // Style header row
                     const range = XLSX.utils.decode_range(worksheet['!ref']);
@@ -844,47 +1068,34 @@
                         };
                     }
                     
+                    // Style TOTAL FTE row (bold with background)
+                    const totalRowIndex = roles.length + 2; // After roles and empty row
+                    for (let col = range.s.c; col <= range.e.c; col++) {
+                        const cellRef = XLSX.utils.encode_cell({ r: totalRowIndex, c: col });
+                        if (!worksheet[cellRef]) continue;
+                        worksheet[cellRef].s = {
+                            font: { bold: true, sz: 11 },
+                            fill: { fgColor: { rgb: "FEF3C7" } }, // Light yellow
+                            alignment: { horizontal: 'center', vertical: 'center' }
+                        };
+                    }
+                    
+                    // Style tribe total row (bold)
+                    const tribeTotalRowIndex = totalRowIndex + 2;
+                    for (let col = range.s.c; col <= Math.min(range.s.c + 1, range.e.c); col++) {
+                        const cellRef = XLSX.utils.encode_cell({ r: tribeTotalRowIndex, c: col });
+                        if (!worksheet[cellRef]) continue;
+                        worksheet[cellRef].s = {
+                            font: { bold: true, sz: 11 },
+                            fill: { fgColor: { rgb: "DBEAFE" } }, // Light blue
+                            alignment: { horizontal: 'left', vertical: 'center' }
+                        };
+                    }
+                    
                     // Add worksheet to workbook with tribe name (limit to 31 chars for Excel)
                     const sheetName = tribe.name.substring(0, 31);
                     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
                 });
-                
-                // Create summary sheet
-                const summaryData = [
-                    ['Tribe Summary Report'],
-                    ['Generated', new Date().toLocaleString()],
-                    [],
-                    ['Tribe', 'Total Headcount', 'Hired', 'Open', 'Hiring', 'Fill Rate']
-                ];
-                
-                tribes.forEach(tribe => {
-                    const tribePersonnel = personnel.filter(p => p.tribe === tribe.name && p.status !== 'Resigned');
-                    const hired = tribePersonnel.filter(p => p.status === 'Hired').length;
-                    const open = tribePersonnel.filter(p => p.status === 'Open').length;
-                    const hiring = tribePersonnel.filter(p => p.status === 'Hiring').length;
-                    const fillRate = tribePersonnel.length > 0 ? Math.round((hired / tribePersonnel.length) * 100) : 0;
-                    
-                    summaryData.push([
-                        tribe.name,
-                        tribePersonnel.length,
-                        hired,
-                        open,
-                        hiring,
-                        `${fillRate}%`
-                    ]);
-                });
-                
-                const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
-                summarySheet['!cols'] = [
-                    { wch: 25 },
-                    { wch: 18 },
-                    { wch: 12 },
-                    { wch: 12 },
-                    { wch: 12 },
-                    { wch: 12 }
-                ];
-                
-                XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary', 0);
                 
                 // Generate Excel file and download
                 const fileName = `Headcount_Export_${new Date().toISOString().split('T')[0]}.xlsx`;
@@ -1053,6 +1264,18 @@
             if (tSel) tSel.innerHTML = tribes.map(t => `<option value="${t.name}">${t.name}</option>`).join('');
             if (ltSel) ltSel.innerHTML = `<option value="">Individual Contributor</option>` + config.leadershipTitles.map(t => `<option value="${t}">${t}</option>`).join('');
 
+            // Populate secondary tribes multi-select (exclude primary tribe)
+            const secondarySel = document.getElementById('modal-secondary-select');
+            const updateSecondaryOptions = () => {
+                const selectedTribe = tSel?.value;
+                if (secondarySel) {
+                    secondarySel.innerHTML = tribes
+                        .filter(t => t.name !== selectedTribe)
+                        .map(t => `<option value="${t.name}">${t.name}</option>`)
+                        .join('');
+                }
+            };
+
             const updateSquadOptions = () => {
                 const selectedTribe = tribes.find(t => t.name === tSel.value);
                 if (selectedTribe && sSel) {
@@ -1060,6 +1283,8 @@
                 } else if (sSel) {
                     sSel.innerHTML = `<option value="Unassigned">Unassigned</option>`;
                 }
+                // Update secondary tribes when primary tribe changes
+                updateSecondaryOptions();
             };
             if (tSel) tSel.onchange = updateSquadOptions;
             updateSquadOptions();
@@ -1211,7 +1436,7 @@
                                 <tr class="bg-slate-950 text-white"><td class="py-6 pl-6 font-black text-[11px] uppercase tracking-[0.2em]">Total Tribe (FTE)</td>${targetTribes.map(t => `<td class="py-6 px-8 text-center text-2xl font-black">${personnel.filter(p => p.tribe === t.name && p.status === 'Hired').length}</td>`).join('')}</tr>
                                 
                                 <tr class="bg-slate-50/30"><td colspan="${targetTribes.length + 1}" class="py-3 px-4 text-[9px] font-black uppercase text-slate-400 tracking-widest">Functional FTE Counts</td></tr>
-                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-slate-900 tracking-widest">Engineering</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-indigo-600">${getTribeFunctionCount(t.name, 'eng')}</td>`).join('')}</tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-slate-900 tracking-widest">Eng</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-indigo-600">${getTribeFunctionCount(t.name, 'eng')}</td>`).join('')}</tr>
                                 <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-slate-900 tracking-widest">Product</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-amber-600">${getTribeFunctionCount(t.name, 'prod')}</td>`).join('')}</tr>
                                 <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-slate-900 tracking-widest">Design</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-rose-600">${getTribeFunctionCount(t.name, 'design')}</td>`).join('')}</tr>
                                 <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-slate-900 tracking-widest">Data</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-emerald-600">${getTribeFunctionCount(t.name, 'data')}</td>`).join('')}</tr>
@@ -1364,22 +1589,175 @@
         const renderFunctionsList = () => {
             const container = document.getElementById('functions-container');
             if (!container) return;
-            container.innerHTML = `<h2 class="text-4xl font-black uppercase tracking-tighter text-slate-900 mb-12">Functional Composition</h2>`;
-            Object.entries(config.compositions).forEach(([key, data]) => {
-                const funcPersonnel = personnel.filter(p => getFunctionKey(p.role) === key);
-                const hiredCount = funcPersonnel.filter(p => p.status === 'Hired').length;
-                const vacancyCount = funcPersonnel.filter(p => p.status !== 'Hired').length;
-                const targetFTE = Math.round((config.strategicGoal * data.val) / 100);
+            
+            // Get all unique roles from personnel
+            const allRoles = [...new Set(personnel.map(p => p.role))].filter(r => r);
+            
+            // Create function data for each role
+            const functionData = allRoles.map(role => {
+                const rolePersonnel = personnel.filter(p => p.role === role);
+                const hiredCount = rolePersonnel.filter(p => p.status === 'Hired').length;
+                const vacancyCount = rolePersonnel.filter(p => p.status !== 'Hired' && p.status !== 'Resigned').length;
+                const totalActive = rolePersonnel.filter(p => p.status !== 'Resigned').length;
                 const currentMix = ((hiredCount / (personnel.filter(p => p.status === 'Hired').length || 1)) * 100).toFixed(1);
-                const fteGap = targetFTE - hiredCount;
-                const isDeepExpanded = expandedFunctions.includes(key);
+                
+                // Get function key and color
+                const funcKey = getFunctionKey(role);
                 const colors = { eng: 'indigo', prod: 'amber', design: 'rose', data: 'emerald' };
-                const theme = colors[key] || 'slate';
-                const seniorCount = funcPersonnel.filter(p => parseInt(p.level?.replace(/\D/g, '') || '0') >= 4).length;
-                const leadCount = funcPersonnel.filter(p => p.leadershipTitle || p.level?.startsWith('M') || p.level?.startsWith('L')).length;
+                const theme = colors[funcKey] || 'slate';
+                
+                const seniorCount = rolePersonnel.filter(p => parseInt(p.level?.replace(/\D/g, '') || '0') >= 4).length;
+                const leadCount = rolePersonnel.filter(p => p.leadershipTitle || p.level?.startsWith('M') || p.level?.startsWith('L')).length;
+                
+                return {
+                    role,
+                    funcKey,
+                    theme,
+                    rolePersonnel,
+                    hiredCount,
+                    vacancyCount,
+                    totalActive,
+                    currentMix,
+                    seniorCount,
+                    leadCount
+                };
+            });
+            
+            // Sort by hired count (descending)
+            functionData.sort((a, b) => b.hiredCount - a.hiredCount);
+            
+            // Render header
+            container.innerHTML = `
+                <div class="flex justify-between items-center mb-12">
+                    <div>
+                        <h2 class="text-4xl font-black uppercase tracking-tighter text-slate-900">Job Families</h2>
+                        <p class="text-sm text-slate-500 font-medium mt-2">Sorted by filled headcount • ${functionData.length} families active</p>
+                    </div>
+                </div>
+            `;
+            
+            // Render each function
+            functionData.forEach(data => {
+                const isDeepExpanded = expandedFunctions.includes(data.role);
                 const card = document.createElement('div');
                 card.className = "bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm mb-8 animate-in relative overflow-hidden transition-all duration-500";
-                card.innerHTML = `<div class="grid lg:grid-cols-4 gap-12 items-center"><div class="col-span-1 border-r border-slate-50 pr-8"><h3 class="text-2xl font-black uppercase tracking-tighter text-slate-900 mb-2">${data.label}</h3><div class="inline-flex items-center px-4 py-1.5 rounded-full bg-${theme}-50 text-${theme}-600 text-[10px] font-black uppercase tracking-widest">Target ${data.val}% Mix</div></div><div class="col-span-1 text-center border-r border-slate-50 pr-8"><p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Capacity Health</p><div class="flex items-center justify-center gap-4"><div><h4 class="text-3xl font-black text-slate-900">${hiredCount}</h4><span class="text-[8px] font-black text-slate-300 uppercase">Actual</span></div><div class="text-slate-200 text-xl font-thin">/</div><div><h4 class="text-3xl font-black text-slate-400">${targetFTE}</h4><span class="text-[8px] font-black text-slate-300 uppercase">Target</span></div></div></div><div class="col-span-1 text-center border-r border-slate-50 pr-8"><p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Utilization Gap</p><h4 class="text-3xl font-black ${fteGap > 0 ? 'text-red-500' : 'text-emerald-500'}">${fteGap > 0 ? '+' + fteGap : fteGap}</h4><span class="text-[8px] font-black text-slate-300 uppercase">${fteGap > 0 ? 'Hires Needed' : 'Over Capacity'}</span></div><div class="col-span-1 text-right flex flex-col items-end gap-3"><button onclick="window.toggleFunctionDeepDive('${key}')" class="bg-[#ff5a00] text-white px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-orange-600 transition-colors shadow-lg">${isDeepExpanded ? 'Collapse Deep Dive' : 'Open Deep Dive'}</button><div class="flex gap-2"><span class="bg-slate-50 text-slate-500 px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest">${currentMix}% Current Mix</span><span class="bg-red-50 text-red-500 px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest">${vacancyCount} Open</span></div></div></div>${isDeepExpanded ? `<div class="mt-12 pt-12 border-t border-slate-50 animate-in"><div class="grid lg:grid-cols-3 gap-8 mb-12"><div class="bg-slate-50 p-6 rounded-3xl"><h5 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Seniority Distribution</h5><div class="space-y-3"><div class="flex justify-between items-center"><span class="text-[9px] font-black uppercase">Senior (IC4+)</span><span class="font-bold">${seniorCount}</span></div><div class="flex justify-between items-center"><span class="text-[9px] font-black uppercase">Leadership Titles</span><span class="font-bold text-indigo-600">${leadCount}</span></div><div class="flex justify-between items-center border-t pt-2 border-slate-200"><span class="text-[9px] font-black uppercase">Density Index</span><span class="text-indigo-600 font-black">${((seniorCount / (hiredCount || 1)) * 100).toFixed(0)}%</span></div></div></div><div class="bg-slate-50 p-6 rounded-3xl col-span-2"><h5 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Functional Deployment (Top Tribes)</h5><div class="flex flex-wrap gap-3">${[...new Set(funcPersonnel.map(p => p.tribe))].slice(0, 6).map(t => { const count = funcPersonnel.filter(p => p.tribe === t).length; return `<div class="bg-white border border-slate-200 px-4 py-2 rounded-2xl flex items-center gap-3 shadow-sm"><span class="text-[9px] font-black uppercase text-slate-900">${t}</span><span class="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-lg text-[10px] font-black">${count}</span></div>`; }).join('')}</div></div></div><h5 class="text-xl font-black uppercase tracking-tighter text-slate-900 mb-6">${data.label} Roster</h5><div class="overflow-x-auto"><table class="w-full text-left"><thead><tr class="text-[10px] font-black text-slate-300 uppercase tracking-widest border-b"><th class="pb-4">Name</th><th class="pb-4">Level</th><th class="pb-4">Tribe / Squad</th><th class="pb-4 text-right">Status</th></tr></thead><tbody>${funcPersonnel.map(m => `<tr class="border-b border-slate-50 last:border-0"><td class="py-4"><span class="font-bold text-slate-800 text-sm block">${m.name}</span>${m.leadershipTitle ? `<span class="text-[8px] font-black text-indigo-500 uppercase tracking-widest">${m.leadershipTitle}</span>` : ''}</td><td class="py-4 font-mono text-xs text-slate-400">${m.level}</td><td class="py-4"><span class="text-[10px] font-black uppercase text-slate-400 block">${m.tribe}</span>${m.secondaryTribes && m.secondaryTribes.length ? `<span class="text-[8px] text-slate-300 uppercase italic">Covers: ${m.secondaryTribes.join(', ')}</span>` : `<span class="text-[9px] font-medium text-slate-300 uppercase">${m.squad}</span>`}</td><td class="py-4 text-right"><span class="text-[10px] font-black uppercase ${m.status === 'Hired' ? 'text-emerald-500' : 'text-amber-500'}">${m.status}</span></td></tr>`).join('')}</tbody></table></div></div>` : `<div class="mt-10 h-2 bg-slate-50 rounded-full overflow-hidden"><div class="h-full bg-${theme}-500 rounded-full transition-all duration-1000" style="width: ${Math.min((hiredCount / (targetFTE || 1)) * 100, 100)}%"></div></div>`}`;
+                card.innerHTML = `
+                    <div class="grid lg:grid-cols-4 gap-12 items-center">
+                        <div class="col-span-1 border-r border-slate-50 pr-8">
+                            <h3 class="text-2xl font-black uppercase tracking-tighter text-slate-900 mb-2">${data.role}</h3>
+                            <div class="inline-flex items-center px-4 py-1.5 rounded-full bg-${data.theme}-50 text-${data.theme}-600 text-[10px] font-black uppercase tracking-widest">
+                                ${data.funcKey.toUpperCase()}
+                            </div>
+                        </div>
+                        <div class="col-span-1 text-center border-r border-slate-50 pr-8">
+                            <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Headcount</p>
+                            <div class="flex items-center justify-center gap-4">
+                                <div>
+                                    <h4 class="text-3xl font-black text-emerald-600">${data.hiredCount}</h4>
+                                    <span class="text-[8px] font-black text-slate-300 uppercase">Filled</span>
+                                </div>
+                                <div class="text-slate-200 text-xl font-thin">/</div>
+                                <div>
+                                    <h4 class="text-3xl font-black text-slate-400">${data.totalActive}</h4>
+                                    <span class="text-[8px] font-black text-slate-300 uppercase">Total</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-span-1 text-center border-r border-slate-50 pr-8">
+                            <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Mix & Vacancies</p>
+                            <h4 class="text-3xl font-black text-slate-900">${data.currentMix}%</h4>
+                            <span class="text-[8px] font-black text-slate-300 uppercase">Current Mix</span>
+                            <div class="mt-3">
+                                <span class="bg-amber-50 text-amber-600 px-3 py-1 rounded-full text-[8px] font-black uppercase">${data.vacancyCount} Open</span>
+                            </div>
+                        </div>
+                        <div class="col-span-1 text-right flex flex-col items-end gap-3">
+                            <button onclick="window.toggleFunctionDeepDive('${data.role}')" class="bg-[#ff5a00] text-white px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-orange-600 transition-colors shadow-lg">
+                                ${isDeepExpanded ? 'Collapse' : 'Expand'} Roster
+                            </button>
+                        </div>
+                    </div>
+                    
+                    ${isDeepExpanded ? `
+                        <div class="mt-12 pt-12 border-t border-slate-50 animate-in">
+                            <div class="grid lg:grid-cols-3 gap-8 mb-12">
+                                <div class="bg-slate-50 p-6 rounded-3xl">
+                                    <h5 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Seniority Distribution</h5>
+                                    <div class="space-y-3">
+                                        <div class="flex justify-between items-center">
+                                            <span class="text-[9px] font-black uppercase">Senior (IC4+)</span>
+                                            <span class="font-bold">${data.seniorCount}</span>
+                                        </div>
+                                        <div class="flex justify-between items-center">
+                                            <span class="text-[9px] font-black uppercase">Leadership Titles</span>
+                                            <span class="font-bold text-indigo-600">${data.leadCount}</span>
+                                        </div>
+                                        <div class="flex justify-between items-center border-t pt-2 border-slate-200">
+                                            <span class="text-[9px] font-black uppercase">Senior Density</span>
+                                            <span class="text-indigo-600 font-black">${((data.seniorCount / (data.hiredCount || 1)) * 100).toFixed(0)}%</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="bg-slate-50 p-6 rounded-3xl col-span-2">
+                                    <h5 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Tribe Distribution</h5>
+                                    <div class="flex flex-wrap gap-3">
+                                        ${[...new Set(data.rolePersonnel.map(p => p.tribe))]
+                                            .filter(t => t)
+                                            .slice(0, 8)
+                                            .map(t => {
+                                                const count = data.rolePersonnel.filter(p => p.tribe === t).length;
+                                                return `
+                                                    <div class="bg-white border border-slate-200 px-4 py-2 rounded-2xl flex items-center gap-3 shadow-sm">
+                                                        <span class="text-[9px] font-black uppercase text-slate-900">${t}</span>
+                                                        <span class="bg-${data.theme}-50 text-${data.theme}-600 px-2 py-0.5 rounded-lg text-[10px] font-black">${count}</span>
+                                                    </div>
+                                                `;
+                                            }).join('')}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <h5 class="text-xl font-black uppercase tracking-tighter text-slate-900 mb-6">${data.role} Roster</h5>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left">
+                                    <thead>
+                                        <tr class="text-[10px] font-black text-slate-300 uppercase tracking-widest border-b">
+                                            <th class="pb-4">Name</th>
+                                            <th class="pb-4">Level</th>
+                                            <th class="pb-4">Tribe / Squad</th>
+                                            <th class="pb-4 text-right">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${data.rolePersonnel
+                                            .filter(m => m.status !== 'Resigned')
+                                            .map(m => `
+                                                <tr class="border-b border-slate-50 last:border-0 hover:bg-slate-50 cursor-pointer transition-colors" onclick="window.openRosterEditModal('${m.id}')">
+                                                    <td class="py-4">
+                                                        <span class="font-bold text-slate-800 text-sm block">${m.name}</span>
+                                                        ${m.leadershipTitle ? `<span class="text-[8px] font-black text-indigo-500 uppercase tracking-widest">${m.leadershipTitle}</span>` : ''}
+                                                    </td>
+                                                    <td class="py-4 font-mono text-xs text-slate-400">${m.level || 'N/A'}</td>
+                                                    <td class="py-4">
+                                                        <span class="text-[10px] font-black uppercase text-slate-700 block">${m.tribe || 'N/A'}</span>
+                                                        <span class="text-[9px] font-medium text-slate-400 uppercase">${m.squad || 'N/A'}</span>
+                                                        ${m.secondaryTribes && m.secondaryTribes.length ? `<div class="text-[8px] text-slate-300 uppercase italic mt-1">+ ${m.secondaryTribes.join(', ')}</div>` : ''}
+                                                    </td>
+                                                    <td class="py-4 text-right">
+                                                        <span class="text-[10px] font-black uppercase ${m.status === 'Hired' ? 'text-emerald-500' : m.status === 'Hiring' ? 'text-amber-500' : 'text-slate-400'}">${m.status}</span>
+                                                    </td>
+                                                </tr>
+                                            `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="mt-10 h-2 bg-slate-50 rounded-full overflow-hidden">
+                            <div class="h-full bg-${data.theme}-500 rounded-full transition-all duration-1000" style="width: ${Math.min((data.hiredCount / (data.totalActive || 1)) * 100, 100)}%"></div>
+                        </div>
+                    `}
+                `;
                 container.appendChild(card);
             });
         };
@@ -1473,7 +1851,7 @@
                     <div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
                         <h4 class="text-[11px] font-black uppercase text-emerald-500 mb-6 tracking-widest">Tribe Composition</h4>
                         <div class="grid grid-cols-2 gap-4">
-                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Engineering</p><h3 class="text-2xl font-black">${counts.eng}</h3></div>
+                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng</p><h3 class="text-2xl font-black">${counts.eng}</h3></div>
                             <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Product</p><h3 class="text-2xl font-black">${counts.pm}</h3></div>
                             <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Design</p><h3 class="text-2xl font-black">${counts.pd}</h3></div>
                             <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Data</p><h3 class="text-2xl font-black">${counts.da}</h3></div>
@@ -1748,64 +2126,16 @@
             const container = document.getElementById('roster-view-content');
             if (!container) return;
             
-            // Enhanced filtering
-            let filtered = personnel.filter(p => {
-                const searchTerm = rosterFilters.search.toLowerCase();
-                const matchSearch = 
-                    p.name.toLowerCase().includes(searchTerm) ||
-                    (p.tribe || '').toLowerCase().includes(searchTerm) ||
-                    (p.squad || '').toLowerCase().includes(searchTerm) ||
-                    (p.role || '').toLowerCase().includes(searchTerm) ||
-                    (p.leadershipTitle || '').toLowerCase().includes(searchTerm);
-                
-                const matchRole = rosterFilters.role === 'all' || p.role === rosterFilters.role;
-                const matchStatus = rosterFilters.status === 'all' || p.status === rosterFilters.status;
-                const matchTribe = rosterFilters.tribe === 'all' || p.tribe === rosterFilters.tribe;
-                const matchSquad = rosterFilters.squad === 'all' || p.squad === rosterFilters.squad;
-                
-                return matchSearch && matchRole && matchStatus && matchTribe && matchSquad;
-            });
-            
-            // Sorting
-            filtered.sort((a, b) => {
-                let aVal, bVal;
-                switch(rosterFilters.sortBy) {
-                    case 'name':
-                        aVal = (a.name || '').toLowerCase();
-                        bVal = (b.name || '').toLowerCase();
-                        break;
-                    case 'role':
-                        aVal = (a.role || '').toLowerCase();
-                        bVal = (b.role || '').toLowerCase();
-                        break;
-                    case 'tribe':
-                        aVal = (a.tribe || '').toLowerCase();
-                        bVal = (b.tribe || '').toLowerCase();
-                        break;
-                    case 'squad':
-                        aVal = (a.squad || '').toLowerCase();
-                        bVal = (b.squad || '').toLowerCase();
-                        break;
-                    case 'status':
-                        aVal = (a.status || '').toLowerCase();
-                        bVal = (b.status || '').toLowerCase();
-                        break;
-                    default:
-                        aVal = (a.name || '').toLowerCase();
-                        bVal = (b.name || '').toLowerCase();
-                }
-                
-                if (rosterFilters.sortOrder === 'asc') {
-                    return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-                } else {
-                    return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
-                }
-            });
+            // Use helper function for filtering and sorting
+            const filtered = getFilteredRosterPersonnel();
             
             // Calculate stats for filtered results
             const hiredCount = filtered.filter(p => p.status === 'Hired').length;
             const openCount = filtered.filter(p => p.status === 'Open' || p.status === 'Hiring').length;
             const resignedCount = filtered.filter(p => p.status === 'Resigned').length;
+            
+            // Get squad options for bulk update
+            const allSquads = [...new Set(tribes.flatMap(t => t.squads || []))];
             
             // Render the entire view
             container.innerHTML = `
@@ -1814,6 +2144,61 @@
                         <h2 class="text-4xl font-black uppercase text-slate-900 tracking-tighter">Master Roster</h2>
                         <button onclick="window.openEntryModal()" class="bg-[#ff5a00] text-white px-8 py-4 rounded-3xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-orange-100 hover:scale-105 active:scale-95 transition-all">Add Headcount</button>
                     </div>
+                    
+                    <!-- Bulk Actions Bar -->
+                    ${selectedRosterIds.size > 0 ? `
+                        <div class="mb-6 p-6 rounded-3xl bg-indigo-50 border-2 border-indigo-200">
+                            <div class="flex flex-wrap items-center gap-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-black">
+                                        ${selectedRosterIds.size}
+                                    </div>
+                                    <span class="font-black text-slate-900">Selected</span>
+                                </div>
+                                
+                                <div class="h-8 w-px bg-indigo-200"></div>
+                                
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-black text-slate-500 uppercase">Update Role:</span>
+                                    <select onchange="if(this.value) window.applyBulkUpdate('role', this.value); this.value='';" class="bg-white border-indigo-200 rounded-xl px-4 py-2 text-xs font-bold">
+                                        <option value="">Select...</option>
+                                        ${config.roles.map(r => `<option value="${r}">${r}</option>`).join('')}
+                                    </select>
+                                </div>
+                                
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-black text-slate-500 uppercase">Update Tribe:</span>
+                                    <select onchange="if(this.value) window.applyBulkUpdate('tribe', this.value); this.value='';" class="bg-white border-indigo-200 rounded-xl px-4 py-2 text-xs font-bold">
+                                        <option value="">Select...</option>
+                                        ${tribes.map(t => `<option value="${t.name}">${t.name}</option>`).join('')}
+                                    </select>
+                                </div>
+                                
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-black text-slate-500 uppercase">Update Squad:</span>
+                                    <select onchange="if(this.value) window.applyBulkUpdate('squad', this.value); this.value='';" class="bg-white border-indigo-200 rounded-xl px-4 py-2 text-xs font-bold">
+                                        <option value="">Select...</option>
+                                        ${allSquads.map(s => `<option value="${s}">${s}</option>`).join('')}
+                                    </select>
+                                </div>
+                                
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-black text-slate-500 uppercase">Update Status:</span>
+                                    <select onchange="if(this.value) window.applyBulkUpdate('status', this.value); this.value='';" class="bg-white border-indigo-200 rounded-xl px-4 py-2 text-xs font-bold">
+                                        <option value="">Select...</option>
+                                        <option value="Hired">Hired</option>
+                                        <option value="Hiring">Hiring</option>
+                                        <option value="Open">Open</option>
+                                        <option value="Resigned">Resigned</option>
+                                    </select>
+                                </div>
+                                
+                                <button onclick="window.clearRosterSelection()" class="ml-auto bg-white border-2 border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-xs font-black uppercase hover:bg-slate-50 transition-colors">
+                                    Clear Selection
+                                </button>
+                            </div>
+                        </div>
+                    ` : ''}
                     
                     <!-- Search and Filters -->
                     <div class="mb-8 space-y-4">
@@ -1866,10 +2251,23 @@
                         </p>
                     </div>
                     
+                    <div class="mb-6">
+                        <p class="text-sm text-slate-500 font-medium">
+                            <i class="fa-solid fa-info-circle text-[#ff5a00] mr-2"></i>
+                            Select people using checkboxes for bulk updates, or click any row to edit individually
+                        </p>
+                    </div>
+                    
                     <div class="overflow-x-auto no-scrollbar">
                         <table class="w-full text-left">
                             <thead>
                                 <tr class="text-[12px] font-black text-slate-400 uppercase tracking-[0.25em] border-b border-slate-50">
+                                    <th class="pb-10 px-4 w-12">
+                                        <input type="checkbox" 
+                                            ${selectedRosterIds.size === filtered.length && filtered.length > 0 ? 'checked' : ''}
+                                            onchange="window.toggleAllRosterSelection()" 
+                                            class="w-5 h-5 rounded border-2 border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer">
+                                    </th>
                                     <th class="pb-10 px-4">Name</th>
                                     <th class="pb-10">Role</th>
                                     <th class="pb-10">Level</th>
@@ -1879,21 +2277,27 @@
                             </thead>
                             <tbody>
                                 ${filtered.map(p => `
-                                    <tr class="hover:bg-slate-50 text-sm border-b border-slate-50 transition-colors cursor-pointer" onclick="window.openRosterEditModal('${p.id}')">
-                                        <td class="py-6 px-4">
+                                    <tr class="hover:bg-slate-50 text-sm border-b border-slate-50 transition-colors">
+                                        <td class="py-6 px-4" onclick="event.stopPropagation()">
+                                            <input type="checkbox" 
+                                                ${selectedRosterIds.has(p.id) ? 'checked' : ''}
+                                                onchange="window.toggleRosterSelection('${p.id}')" 
+                                                class="w-5 h-5 rounded border-2 border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer">
+                                        </td>
+                                        <td class="py-6 px-4 cursor-pointer" onclick="window.openRosterEditModal('${p.id}')">
                                             <div class="font-bold text-slate-800">${p.name}</div>
                                             ${p.leadershipTitle ? `<div class="text-[8px] font-black uppercase text-indigo-500 mt-1">${p.leadershipTitle}</div>` : ''}
                                         </td>
-                                        <td class="py-6">
+                                        <td class="py-6 cursor-pointer" onclick="window.openRosterEditModal('${p.id}')">
                                             <span class="px-3 py-1 rounded-xl text-[10px] font-black uppercase ${getRoleColorClass(p.role)}">${p.role}</span>
                                         </td>
-                                        <td class="py-6">
+                                        <td class="py-6 cursor-pointer" onclick="window.openRosterEditModal('${p.id}')">
                                             <span class="font-mono text-xs text-slate-600">${p.level || 'N/A'}</span>
                                         </td>
-                                        <td class="py-6">
+                                        <td class="py-6 cursor-pointer" onclick="window.openRosterEditModal('${p.id}')">
                                             <div class="text-sm font-bold text-slate-700">${p.tribe || 'N/A'} / ${p.squad || 'N/A'}</div>
                                         </td>
-                                        <td class="py-6 text-right px-4">
+                                        <td class="py-6 text-right px-4 cursor-pointer" onclick="window.openRosterEditModal('${p.id}')">
                                             <span class="text-[10px] font-black uppercase ${p.status === 'Hired' ? 'text-emerald-500' : p.status === 'Hiring' ? 'text-amber-500' : p.status === 'Resigned' ? 'text-slate-400' : 'text-slate-400'}">${p.status}</span>
                                         </td>
                                     </tr>
@@ -1936,7 +2340,7 @@
             const rC = getRoleCounts(filtered);
             const r = getLeverageRatios(filtered);
             const leaders = filtered.filter(p => p.leadershipTitle || p.level.startsWith('L') || p.level.startsWith('M')).length;
-            container.innerHTML = `<div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12"><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Tribe Selection</h4><div class="flex flex-wrap gap-2">${tribes.map(t => `<button onclick="window.toggleInsightFilter('tribes', '${t.name}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.tribes.includes(t.name) ? 'bg-[#ff5a00] text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${t.name}</button>`).join('')}</div></div><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Squad Selection</h4><div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto no-scrollbar">${tribes.flatMap(t => t.squads || []).map(s => `<button onclick="window.toggleInsightFilter('squads', '${s}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.squads.includes(s) ? 'bg-[#ff5a00] text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${s}</button>`).join('')}</div></div></div><div class="grid lg:grid-cols-3 gap-10 mb-12"><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-indigo-500 mb-8 tracking-widest">Engineering Leverage</h4><div class="space-y-6"><div><h3 class="text-4xl font-black">${r.engPm}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PM (Target ${config.ratios.pm.min}:1 - ${config.ratios.pm.max}:1)</p></div><div class="pt-4 border-t border-slate-50"><h3 class="text-4xl font-black">${r.engPd}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PD (Target ${config.ratios.design.min}:1 - ${config.ratios.design.max}:1)</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-emerald-500 mb-8 tracking-widest">Composition Mix</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${((rC.eng/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Eng Share</p></div><div class="text-right"><h3 class="text-4xl font-black">${((rC.pm/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Product Share</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-orange-500 mb-8 tracking-widest">Bench Strength</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${leaders}</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Leaders</p></div><div class="text-right"><h3 class="text-4xl font-black">${((leaders/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Density Mix</p></div></div></div></div>`;
+            container.innerHTML = `<div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12"><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Tribe Selection</h4><div class="flex flex-wrap gap-2">${tribes.map(t => `<button onclick="window.toggleInsightFilter('tribes', '${t.name}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.tribes.includes(t.name) ? 'bg-[#ff5a00] text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${t.name}</button>`).join('')}</div></div><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Squad Selection</h4><div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto no-scrollbar">${tribes.flatMap(t => t.squads || []).map(s => `<button onclick="window.toggleInsightFilter('squads', '${s}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.squads.includes(s) ? 'bg-[#ff5a00] text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${s}</button>`).join('')}</div></div></div><div class="grid lg:grid-cols-3 gap-10 mb-12"><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-indigo-500 mb-8 tracking-widest">Eng Leverage</h4><div class="space-y-6"><div><h3 class="text-4xl font-black">${r.engPm}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PM (Target ${config.ratios.pm.min}:1 - ${config.ratios.pm.max}:1)</p></div><div class="pt-4 border-t border-slate-50"><h3 class="text-4xl font-black">${r.engPd}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PD (Target ${config.ratios.design.min}:1 - ${config.ratios.design.max}:1)</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-emerald-500 mb-8 tracking-widest">Composition Mix</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${((rC.eng/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Eng Share</p></div><div class="text-right"><h3 class="text-4xl font-black">${((rC.pm/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Product Share</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-orange-500 mb-8 tracking-widest">Bench Strength</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${leaders}</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Leaders</p></div><div class="text-right"><h3 class="text-4xl font-black">${((leaders/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Density Mix</p></div></div></div></div>`;
         };
 
         const renderHeaderStats = () => {
@@ -2244,8 +2648,15 @@
             document.getElementById('logout-btn').addEventListener('click', () => signOut(auth)); 
             document.getElementById('add-entry-form').addEventListener('submit', (e) => { 
                 e.preventDefault(); 
-                const formData = new FormData(e.target); 
-                window.addNewHeadcount(Object.fromEntries(formData)); 
+                const formData = new FormData(e.target);
+                const data = Object.fromEntries(formData);
+                
+                // Get selected secondary tribes from multi-select
+                const secondarySelect = document.getElementById('modal-secondary-select');
+                const selectedSecondary = Array.from(secondarySelect.selectedOptions).map(option => option.value);
+                data.secondaryTribes = selectedSecondary.join(','); // Convert to CSV for existing handler
+                
+                window.addNewHeadcount(data); 
             }); 
         });
     </script>
@@ -2259,6 +2670,25 @@
         ::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 10px; }
         .animate-in { animation: fadeIn 0.4s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Multi-select improvements */
+        select[multiple] option {
+            padding: 8px 12px;
+            margin: 2px 0;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        select[multiple] option:hover {
+            background-color: #EEF2FF !important;
+        }
+        select[multiple] option:checked {
+            background: linear-gradient(135deg, #4F46E5 0%, #6366F1 100%) !important;
+            color: white !important;
+            font-weight: 600;
+        }
+        select[multiple]:focus {
+            outline: none;
+        }
     </style>
 </head>
 <body class="min-h-screen text-slate-900 overflow-x-hidden">
@@ -2277,7 +2707,7 @@
             <form id="add-entry-form" class="space-y-6">
                 <div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Full Name</label><input name="name" type="text" placeholder="John Doe" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold" required></div>
                 <div class="grid grid-cols-2 gap-6"><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Role</label><select name="role" id="modal-role-select" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></select></div><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Level</label><select name="level" id="modal-level-select" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></select></div></div>
-                <div class="grid grid-cols-2 gap-6"><div><label class="text-[10px] font-black text-indigo-500 uppercase mb-2 block tracking-widest">Leadership Title <span class="text-[8px] text-slate-400 normal-case ml-1">(Shows in Summary if Hired)</span></label><select name="leadershipTitle" id="modal-ltitle-select" class="w-full bg-indigo-50 border-none rounded-2xl px-6 py-4 font-bold text-indigo-600"></select></div><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Additional Tribes Covered (CSV)</label><input name="secondaryTribes" type="text" placeholder="Tribe A, Tribe B" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></div></div>
+                <div class="grid grid-cols-2 gap-6"><div><label class="text-[10px] font-black text-indigo-500 uppercase mb-2 block tracking-widest">Leadership Title <span class="text-[8px] text-slate-400 normal-case ml-1">(Shows in Summary if Hired)</span></label><select name="leadershipTitle" id="modal-ltitle-select" class="w-full bg-indigo-50 border-none rounded-2xl px-6 py-4 font-bold text-indigo-600"></select></div><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Additional Tribes</label><select name="secondaryTribes" id="modal-secondary-select" multiple class="w-full bg-slate-50 border-2 border-slate-200 rounded-2xl px-3 py-2 font-medium text-sm min-h-[60px] focus:border-indigo-400 focus:ring-0 transition-colors"></select><p class="text-[8px] text-slate-400 mt-1"><i class="fa-solid fa-info-circle mr-1"></i>Click to select/unselect</p></div></div>
                 <div class="grid grid-cols-2 gap-6"><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Primary Tribe</label><select name="tribe" id="modal-tribe-select" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></select></div><div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Squad</label><select name="squad" id="modal-squad-select" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"></select></div></div>
                 <div><label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Status</label><select name="status" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold"><option value="Open" selected>Open (Proposed)</option><option value="Hiring">Hiring (Active)</option><option value="Hired">Hired</option><option value="Resigned">Resigned</option></select></div>
                 <div class="flex gap-4 pt-6"><button type="button" onclick="window.closeEntryModal()" class="flex-1 py-4 px-8 rounded-3xl font-black uppercase text-xs text-slate-400 bg-slate-50">Cancel</button><button type="submit" class="flex-[2] py-4 px-8 rounded-3xl font-black uppercase text-xs text-white bg-indigo-600 shadow-xl shadow-orange-100">Create Entry</button></div>
@@ -2354,11 +2784,7 @@
                     <div>
                         <label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Role</label>
                         <select id="edit-person-role" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold">
-                            <option value="Engineering">Engineering</option>
-                            <option value="Product Management">Product Management</option>
-                            <option value="Product Design">Product Design</option>
-                            <option value="Data Science">Data Science</option>
-                            <option value="Data Engineering">Data Engineering</option>
+                            <!-- Options populated dynamically -->
                         </select>
                     </div>
                     <div>
@@ -2414,8 +2840,11 @@
                 </div>
                 
                 <div>
-                    <label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Additional Tribes Covered (CSV)</label>
-                    <input id="edit-person-secondary" type="text" placeholder="Tribe A, Tribe B" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold">
+                    <label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Additional Tribes Covered</label>
+                    <select id="edit-person-secondary" multiple class="w-full bg-slate-50 border-2 border-slate-200 rounded-2xl px-4 py-3 font-medium text-sm min-h-[120px] focus:border-indigo-400 focus:ring-0 transition-colors">
+                        <!-- Options populated dynamically -->
+                    </select>
+                    <p class="text-[9px] text-slate-400 mt-2"><i class="fa-solid fa-info-circle mr-1"></i>Click to select/unselect. Multiple selections allowed.</p>
                 </div>
                 
                 <div class="flex gap-4 pt-6">
