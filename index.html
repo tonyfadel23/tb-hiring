@@ -71,7 +71,6 @@
         let expandedFunctions = []; 
         let user = null;
         
-        let insightFilters = { tribes: [], squads: [] };
         let rosterFilters = { search: '', role: 'all', status: 'all', tribe: 'all', squad: 'all', sortBy: 'name', sortOrder: 'asc' };
         let squadManageFilters = { search: '', sortBy: 'name', sortOrder: 'asc' };
         let tribeManageFilters = { search: '', sortBy: 'name', sortOrder: 'asc' };
@@ -780,15 +779,6 @@
             });
 
             return filtered;
-        };
-
-        window.toggleInsightFilter = (key, val) => {
-            if (insightFilters[key].includes(val)) {
-                insightFilters[key] = insightFilters[key].filter(v => v !== val);
-            } else {
-                insightFilters[key].push(val);
-            }
-            refreshDashboard();
         };
 
         window.openEntryModal = () => {
@@ -1969,23 +1959,49 @@
                     <div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
                         <h4 class="text-[11px] font-black uppercase text-indigo-500 mb-6 tracking-widest">Aggregate Leverage</h4>
                         <div class="space-y-6">
-                            <div class="flex justify-between items-end">
-                                <div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : PM</p><h3 class="text-3xl font-black">${ratios.engPm}:1</h3></div>
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : PM</p>
+                                    <h3 class="text-3xl font-black">${ratios.engPm}:1</h3>
+                                    <p class="text-[10px] text-slate-500 font-medium mt-2">${counts.eng} Eng : ${counts.pm} PM</p>
+                                </div>
                                 <div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.pm.min}-${config.ratios.pm.max}</div>
                             </div>
-                            <div class="flex justify-between items-end pt-4 border-t border-slate-50">
-                                <div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : Design</p><h3 class="text-3xl font-black">${ratios.engPd}:1</h3></div>
+                            <div class="flex justify-between items-start pt-4 border-t border-slate-50">
+                                <div>
+                                    <p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : Design</p>
+                                    <h3 class="text-3xl font-black">${ratios.engPd}:1</h3>
+                                    <p class="text-[10px] text-slate-500 font-medium mt-2">${counts.eng} Eng : ${counts.pd} Design</p>
+                                </div>
                                 <div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.design.min}-${config.ratios.design.max}</div>
                             </div>
                         </div>
                     </div>
                     <div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
                         <h4 class="text-[11px] font-black uppercase text-emerald-500 mb-6 tracking-widest">Tribe Composition</h4>
-                        <div class="grid grid-cols-2 gap-4">
-                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng</p><h3 class="text-2xl font-black">${counts.eng}</h3></div>
-                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Product</p><h3 class="text-2xl font-black">${counts.pm}</h3></div>
-                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Design</p><h3 class="text-2xl font-black">${counts.pd}</h3></div>
-                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Data</p><h3 class="text-2xl font-black">${counts.da}</h3></div>
+                        <div class="space-y-3">
+                            ${(() => {
+                                const total = counts.eng + counts.pm + counts.pd + counts.da;
+                                const pctEng = total > 0 ? Math.round((counts.eng / total) * 100) : 0;
+                                const pctPm = total > 0 ? Math.round((counts.pm / total) * 100) : 0;
+                                const pctPd = total > 0 ? Math.round((counts.pd / total) * 100) : 0;
+                                const pctDa = total > 0 ? Math.round((counts.da / total) * 100) : 0;
+                                
+                                return `
+                                    <div class="text-lg font-black text-slate-900">
+                                        ${counts.eng} Eng : ${counts.pm} PM : ${counts.pd} Design : ${counts.da} Data
+                                    </div>
+                                    <div class="text-sm font-bold text-slate-500">
+                                        (${pctEng}% : ${pctPm}% : ${pctPd}% : ${pctDa}%)
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-100">
+                                        <div class="bg-indigo-50 p-3 rounded-2xl"><p class="text-[9px] text-indigo-600 uppercase font-black mb-1">Eng</p><h3 class="text-xl font-black text-indigo-900">${counts.eng}</h3></div>
+                                        <div class="bg-amber-50 p-3 rounded-2xl"><p class="text-[9px] text-amber-600 uppercase font-black mb-1">Product</p><h3 class="text-xl font-black text-amber-900">${counts.pm}</h3></div>
+                                        <div class="bg-rose-50 p-3 rounded-2xl"><p class="text-[9px] text-rose-600 uppercase font-black mb-1">Design</p><h3 class="text-xl font-black text-rose-900">${counts.pd}</h3></div>
+                                        <div class="bg-emerald-50 p-3 rounded-2xl"><p class="text-[9px] text-emerald-600 uppercase font-black mb-1">Data</p><h3 class="text-xl font-black text-emerald-900">${counts.da}</h3></div>
+                                    </div>
+                                `;
+                            })()}
                         </div>
                     </div>
                     <div class="bg-slate-900 p-10 rounded-[48px] shadow-2xl text-white">
@@ -2461,19 +2477,6 @@
             `;
         };
 
-        const renderInsights = () => {
-            const container = document.getElementById('insights-view-content');
-            if (!container) return;
-            let filtered = viewContext === 'hired' ? personnel.filter(p => p.status === 'Hired') : personnel;
-            if (insightFilters.tribes.length > 0) filtered = filtered.filter(p => insightFilters.tribes.includes(p.tribe));
-            if (insightFilters.squads.length > 0) filtered = filtered.filter(p => insightFilters.squads.includes(p.squad));
-            const total = filtered.length || 1;
-            const rC = getRoleCounts(filtered);
-            const r = getLeverageRatios(filtered);
-            const leaders = filtered.filter(p => p.leadershipTitle || p.level.startsWith('L') || p.level.startsWith('M')).length;
-            container.innerHTML = `<div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12"><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Tribe Selection</h4><div class="flex flex-wrap gap-2">${tribes.map(t => `<button onclick="window.toggleInsightFilter('tribes', '${t.name}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.tribes.includes(t.name) ? 'bg-[#ff5a00] text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${t.name}</button>`).join('')}</div></div><div class="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-6">Squad Selection</h4><div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto no-scrollbar">${tribes.flatMap(t => t.squads || []).map(s => `<button onclick="window.toggleInsightFilter('squads', '${s}')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${insightFilters.squads.includes(s) ? 'bg-[#ff5a00] text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}">${s}</button>`).join('')}</div></div></div><div class="grid lg:grid-cols-3 gap-10 mb-12"><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-indigo-500 mb-8 tracking-widest">Eng Leverage</h4><div class="space-y-6"><div><h3 class="text-4xl font-black">${r.engPm}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PM (Target ${config.ratios.pm.min}:1 - ${config.ratios.pm.max}:1)</p></div><div class="pt-4 border-t border-slate-50"><h3 class="text-4xl font-black">${r.engPd}:1</h3><p class="text-[9px] text-slate-400 uppercase font-black">Eng:PD (Target ${config.ratios.design.min}:1 - ${config.ratios.design.max}:1)</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-emerald-500 mb-8 tracking-widest">Composition Mix</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${((rC.eng/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Eng Share</p></div><div class="text-right"><h3 class="text-4xl font-black">${((rC.pm/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Product Share</p></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-[12px] font-black uppercase text-orange-500 mb-8 tracking-widest">Bench Strength</h4><div class="grid grid-cols-2 gap-6"><div><h3 class="text-4xl font-black">${leaders}</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Leaders</p></div><div class="text-right"><h3 class="text-4xl font-black">${((leaders/total)*100).toFixed(1)}%</h3><p class="text-[9px] text-slate-400 uppercase font-black mt-1">Density Mix</p></div></div></div></div>`;
-        };
-
         const renderHeaderStats = () => {
             const activePersonnel = personnel.filter(p => p.status !== 'Resigned');
             const filled = activePersonnel.filter(p => p.status === 'Hired').length;
@@ -2495,7 +2498,6 @@
             if (activeTab === 'tribes') renderTribeList();
             if (activeTab === 'functions') renderFunctionsList();
             if (activeTab === 'roster') renderRoster();
-            if (activeTab === 'insights') renderInsights();
             if (activeTab === 'config') renderConfig();
             if (activeTab === 'squad-manage') renderSquadManage();
             if (activeTab === 'tribe-manage') renderTribeManage();
@@ -2858,7 +2860,6 @@
                 <div onclick="window.setTab('tribes')" data-tab="tribes" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Tribes</div>
                 <div onclick="window.setTab('functions')" data-tab="functions" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Functions</div>
                 <div onclick="window.setTab('roster')" data-tab="roster" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Roster</div>
-                <div onclick="window.setTab('insights')" data-tab="insights" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Insights</div>
                 <div onclick="window.setTab('config')" data-tab="config" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Config</div>
             </div>
             <div class="flex items-center gap-6">
@@ -2877,7 +2878,6 @@
             <div id="functions-view" class="tab-view hidden"><div id="functions-container"></div></div>
             <div id="tribe-manage-view" class="tab-view hidden"><div id="tribe-manage-view-content"></div></div>
             <div id="squad-manage-view" class="tab-view hidden"><div id="squad-manage-view-content"></div></div>
-            <div id="insights-view" class="tab-view hidden"><div id="insights-view-content"></div></div>
             <div id="config-view" class="tab-view hidden"><div id="config-view-content"></div></div>
             <div id="roster-view" class="tab-view hidden">
                 <div id="roster-view-content"></div>
