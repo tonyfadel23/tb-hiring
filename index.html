@@ -38,6 +38,7 @@
         let personnel = [];
         let tribes = [];
         let logs = [];
+        let accessControl = { admins: [], viewers: [] };
         let config = {
             strategicGoal: 0,
 
@@ -71,7 +72,9 @@
         let user = null;
         
         let insightFilters = { tribes: [], squads: [] };
-        let rosterFilters = { search: '', role: 'all', status: 'all' };
+        let rosterFilters = { search: '', role: 'all', status: 'all', tribe: 'all', squad: 'all', sortBy: 'name', sortOrder: 'asc' };
+        let squadManageFilters = { search: '', sortBy: 'name', sortOrder: 'asc' };
+        let tribeManageFilters = { search: '', sortBy: 'name', sortOrder: 'asc' };
 
         // Firestore Access Helpers
         const getConfigDoc = () => doc(db, 'artifacts', appId, 'public', 'data', 'config', 'settings');
@@ -154,6 +157,10 @@
                         compositions: data.compositions || config.compositions,
                         leadershipTitles: data.leadershipTitles || config.leadershipTitles,
                         categories: data.categories || config.categories
+                    };
+                    accessControl = {
+                        admins: data.admins || [],
+                        viewers: data.viewers || []
                     };
                     updateModalSelects();
                     refreshDashboard();
@@ -438,6 +445,63 @@
             await setDoc(getConfigDoc(), config, { merge: true });
         };
 
+        // Access Control Functions
+        window.addAdmin = async () => {
+            const email = prompt("Enter admin email address:");
+            if (!email || !email.includes('@')) {
+                alert("Please enter a valid email address");
+                return;
+            }
+            if (accessControl.admins.includes(email)) {
+                alert("This email is already an admin");
+                return;
+            }
+            const newAdmins = [...accessControl.admins, email];
+            await setDoc(getConfigDoc(), { admins: newAdmins }, { merge: true });
+            await logChange('Access Control', `Added admin: ${email}`);
+        };
+
+        window.removeAdmin = async (email) => {
+            if (!confirm(`Remove admin access for ${email}?`)) return;
+            const newAdmins = accessControl.admins.filter(e => e !== email);
+            await setDoc(getConfigDoc(), { admins: newAdmins }, { merge: true });
+            await logChange('Access Control', `Removed admin: ${email}`);
+        };
+
+        window.addViewer = async () => {
+            const email = prompt("Enter viewer email address:");
+            if (!email || !email.includes('@')) {
+                alert("Please enter a valid email address");
+                return;
+            }
+            if (accessControl.viewers.includes(email)) {
+                alert("This email is already a viewer");
+                return;
+            }
+            if (accessControl.admins.includes(email)) {
+                alert("This email is already an admin (has full access)");
+                return;
+            }
+            const newViewers = [...accessControl.viewers, email];
+            await setDoc(getConfigDoc(), { viewers: newViewers }, { merge: true });
+            await logChange('Access Control', `Added viewer: ${email}`);
+        };
+
+        window.removeViewer = async (email) => {
+            if (!confirm(`Remove viewer access for ${email}?`)) return;
+            const newViewers = accessControl.viewers.filter(e => e !== email);
+            await setDoc(getConfigDoc(), { viewers: newViewers }, { merge: true });
+            await logChange('Access Control', `Removed viewer: ${email}`);
+        };
+
+        window.promoteToAdmin = async (email) => {
+            if (!confirm(`Promote ${email} to admin?`)) return;
+            const newViewers = accessControl.viewers.filter(e => e !== email);
+            const newAdmins = [...accessControl.admins, email];
+            await setDoc(getConfigDoc(), { viewers: newViewers, admins: newAdmins }, { merge: true });
+            await logChange('Access Control', `Promoted ${email} to admin`);
+        };
+
         // --- View Logic ---
         window.setTab = (tab) => {
             activeTab = tab;
@@ -462,6 +526,43 @@
         window.updateRosterFilter = (key, val) => {
             rosterFilters[key] = val;
             renderRoster();
+        };
+
+        window.toggleRosterSort = () => {
+            rosterFilters.sortOrder = rosterFilters.sortOrder === 'asc' ? 'desc' : 'asc';
+            const icon = document.getElementById('roster-sort-icon');
+            if (icon) {
+                icon.className = rosterFilters.sortOrder === 'asc' ? 'fa-solid fa-arrow-down-a-z text-sm' : 'fa-solid fa-arrow-up-z-a text-sm';
+            }
+            renderRoster();
+        };
+
+        window.updateSquadManageFilter = (key, val) => {
+            squadManageFilters[key] = val;
+            renderSquadManage();
+        };
+
+        window.toggleSquadManageSort = () => {
+            squadManageFilters.sortOrder = squadManageFilters.sortOrder === 'asc' ? 'desc' : 'asc';
+            const icon = document.getElementById('squad-sort-icon');
+            if (icon) {
+                icon.className = squadManageFilters.sortOrder === 'asc' ? 'fa-solid fa-arrow-down-a-z text-sm' : 'fa-solid fa-arrow-up-z-a text-sm';
+            }
+            renderSquadManage();
+        };
+
+        window.updateTribeManageFilter = (key, val) => {
+            tribeManageFilters[key] = val;
+            renderTribeManage();
+        };
+
+        window.toggleTribeManageSort = () => {
+            tribeManageFilters.sortOrder = tribeManageFilters.sortOrder === 'asc' ? 'desc' : 'asc';
+            const icon = document.getElementById('tribe-sort-icon');
+            if (icon) {
+                icon.className = tribeManageFilters.sortOrder === 'asc' ? 'fa-solid fa-arrow-down-a-z text-sm' : 'fa-solid fa-arrow-up-z-a text-sm';
+            }
+            renderTribeManage();
         };
 
         window.toggleInsightFilter = (key, val) => {
@@ -587,6 +688,138 @@
             const reader = new FileReader();
             reader.onload = async (e) => await processCSV(e.target.result);
             reader.readAsText(file);
+        };
+
+        // Export to Excel function
+        window.exportToExcel = async () => {
+            setLoading(true);
+            try {
+                // We'll use SheetJS (xlsx) library
+                const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs');
+                
+                const workbook = XLSX.utils.book_new();
+                
+                // Create a sheet for each tribe
+                tribes.forEach(tribe => {
+                    const tribePersonnel = personnel.filter(p => p.tribe === tribe.name && p.status !== 'Resigned');
+                    
+                    if (tribePersonnel.length === 0) return; // Skip empty tribes
+                    
+                    // Get all unique squads for this tribe
+                    const squads = tribe.squads || [];
+                    
+                    // Get all unique roles
+                    const roles = [...new Set(tribePersonnel.map(p => p.role))].sort();
+                    
+                    // Create header row
+                    const headers = ['Squad', ...squads];
+                    
+                    // Create data rows - one row per role
+                    const data = [headers];
+                    
+                    roles.forEach(role => {
+                        const row = [role];
+                        
+                        squads.forEach(squad => {
+                            // Get all people with this role in this squad
+                            const people = tribePersonnel.filter(p => 
+                                p.squad === squad && p.role === role
+                            );
+                            
+                            if (people.length === 0) {
+                                row.push('');
+                            } else {
+                                // Join multiple people with line breaks
+                                const names = people.map(p => {
+                                    let name = p.name || 'Unnamed';
+                                    if (p.status === 'Open' || p.status === 'Hiring') {
+                                        name = `Open: ${p.role}`;
+                                    }
+                                    return name;
+                                }).join('\n');
+                                row.push(names);
+                            }
+                        });
+                        
+                        data.push(row);
+                    });
+                    
+                    // Create worksheet from data
+                    const worksheet = XLSX.utils.aoa_to_sheet(data);
+                    
+                    // Set column widths
+                    const colWidths = [{ wch: 20 }]; // First column (role names)
+                    squads.forEach(() => colWidths.push({ wch: 18 })); // Squad columns
+                    worksheet['!cols'] = colWidths;
+                    
+                    // Set row heights for wrapped text
+                    worksheet['!rows'] = data.map(() => ({ hpt: 60 }));
+                    
+                    // Style header row
+                    const range = XLSX.utils.decode_range(worksheet['!ref']);
+                    for (let col = range.s.c; col <= range.e.c; col++) {
+                        const cellRef = XLSX.utils.encode_cell({ r: 0, c: col });
+                        if (!worksheet[cellRef]) continue;
+                        worksheet[cellRef].s = {
+                            font: { bold: true, sz: 12 },
+                            fill: { fgColor: { rgb: "E2E8F0" } },
+                            alignment: { horizontal: 'center', vertical: 'center' }
+                        };
+                    }
+                    
+                    // Add worksheet to workbook with tribe name (limit to 31 chars for Excel)
+                    const sheetName = tribe.name.substring(0, 31);
+                    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+                });
+                
+                // Create summary sheet
+                const summaryData = [
+                    ['Tribe Summary Report'],
+                    ['Generated', new Date().toLocaleString()],
+                    [],
+                    ['Tribe', 'Total Headcount', 'Hired', 'Open', 'Hiring', 'Fill Rate']
+                ];
+                
+                tribes.forEach(tribe => {
+                    const tribePersonnel = personnel.filter(p => p.tribe === tribe.name && p.status !== 'Resigned');
+                    const hired = tribePersonnel.filter(p => p.status === 'Hired').length;
+                    const open = tribePersonnel.filter(p => p.status === 'Open').length;
+                    const hiring = tribePersonnel.filter(p => p.status === 'Hiring').length;
+                    const fillRate = tribePersonnel.length > 0 ? Math.round((hired / tribePersonnel.length) * 100) : 0;
+                    
+                    summaryData.push([
+                        tribe.name,
+                        tribePersonnel.length,
+                        hired,
+                        open,
+                        hiring,
+                        `${fillRate}%`
+                    ]);
+                });
+                
+                const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+                summarySheet['!cols'] = [
+                    { wch: 25 },
+                    { wch: 18 },
+                    { wch: 12 },
+                    { wch: 12 },
+                    { wch: 12 },
+                    { wch: 12 }
+                ];
+                
+                XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary', 0);
+                
+                // Generate Excel file and download
+                const fileName = `Headcount_Export_${new Date().toISOString().split('T')[0]}.xlsx`;
+                XLSX.writeFile(workbook, fileName);
+                
+                await logChange('Export', `Exported data to Excel: ${fileName}`);
+                
+            } catch (err) {
+                console.error("Export failed", err);
+                alert("Failed to export: " + err.message);
+            }
+            setLoading(false);
         };
 
         const processCSV = async (csvText) => {
@@ -1077,32 +1310,419 @@
         const renderTribeManage = () => {
             const container = document.getElementById('tribe-manage-view-content');
             if (!container || !managedTribeContext.name) return;
-            const tribeMbs = personnel.filter(p => p.tribe === managedTribeContext.name || (p.secondaryTribes && p.secondaryTribes.includes(managedTribeContext.name)));
+            
+            let tribeMbs = personnel.filter(p => 
+                p.tribe === managedTribeContext.name || 
+                (p.secondaryTribes && p.secondaryTribes.includes(managedTribeContext.name))
+            ).filter(p => p.status !== 'Resigned');
+            
+            // Apply search filter
+            if (tribeManageFilters.search) {
+                const searchTerm = tribeManageFilters.search.toLowerCase();
+                tribeMbs = tribeMbs.filter(p => 
+                    (p.name || '').toLowerCase().includes(searchTerm) ||
+                    (p.role || '').toLowerCase().includes(searchTerm) ||
+                    (p.squad || '').toLowerCase().includes(searchTerm) ||
+                    (p.level || '').toLowerCase().includes(searchTerm)
+                );
+            }
+            
+            // Apply sorting
+            tribeMbs.sort((a, b) => {
+                let aVal, bVal;
+                switch(tribeManageFilters.sortBy) {
+                    case 'name':
+                        aVal = (a.name || '').toLowerCase();
+                        bVal = (b.name || '').toLowerCase();
+                        break;
+                    case 'role':
+                        aVal = (a.role || '').toLowerCase();
+                        bVal = (b.role || '').toLowerCase();
+                        break;
+                    case 'squad':
+                        aVal = (a.squad || '').toLowerCase();
+                        bVal = (b.squad || '').toLowerCase();
+                        break;
+                    case 'level':
+                        aVal = (a.level || '').toLowerCase();
+                        bVal = (b.level || '').toLowerCase();
+                        break;
+                    case 'status':
+                        aVal = (a.status || '').toLowerCase();
+                        bVal = (b.status || '').toLowerCase();
+                        break;
+                    default:
+                        aVal = (a.name || '').toLowerCase();
+                        bVal = (b.name || '').toLowerCase();
+                }
+                
+                if (tribeManageFilters.sortOrder === 'asc') {
+                    return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+                } else {
+                    return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
+                }
+            });
+            
             const counts = getRoleCounts(tribeMbs);
             const ratios = getLeverageRatios(tribeMbs);
-            container.innerHTML = `<div class="flex items-center gap-4 mb-10"><button onclick="window.setTab('tribes')" class="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-slate-400 hover:text-[#ff5a00] hover:shadow-lg transition-all"><i class="fa-solid fa-arrow-left"></i></button><div><h2 class="text-4xl font-black uppercase tracking-tighter">${managedTribeContext.name} Orchestration</h2><p class="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">Full Tribe Management</p></div></div><div class="grid lg:grid-cols-3 gap-8 mb-12"><div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase text-indigo-500 mb-6 tracking-widest">Aggregate Leverage</h4><div class="space-y-6"><div class="flex justify-between items-end"><div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : PM</p><h3 class="text-3xl font-black">${ratios.engPm}:1</h3></div><div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.pm.min}-${config.ratios.pm.max}</div></div><div class="flex justify-between items-end pt-4 border-t border-slate-50"><div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : Design</p><h3 class="text-3xl font-black">${ratios.engPd}:1</h3></div><div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.design.min}-${config.ratios.design.max}</div></div></div></div><div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase text-emerald-500 mb-6 tracking-widest">Tribe Composition</h4><div class="grid grid-cols-2 gap-4"><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Engineering</p><h3 class="text-2xl font-black">${counts.eng}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Product</p><h3 class="text-2xl font-black">${counts.pm}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Design</p><h3 class="text-2xl font-black">${counts.pd}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Data</p><h3 class="text-2xl font-black">${counts.da}</h3></div></div></div><div class="bg-slate-900 p-10 rounded-[48px] shadow-2xl text-white"><h4 class="text-[11px] font-black uppercase opacity-40 mb-6 tracking-widest">Tribe Summary</h4><div class="space-y-4"><div class="flex justify-between border-b border-white/10 pb-4"><span class="text-[10px] uppercase opacity-60">Primary FTE</span><span class="font-black">${personnel.filter(p => p.tribe === managedTribeContext.name).length}</span></div><div class="flex justify-between border-b border-white/10 pb-4"><span class="text-[10px] uppercase opacity-60">Total Active</span><span class="font-black">${tribeMbs.length}</span></div><div class="flex justify-between pb-2"><span class="text-[10px] uppercase opacity-60">Filled Ratio</span><span class="font-black text-emerald-400">${Math.round((tribeMbs.filter(p => p.status === 'Hired').length / (tribeMbs.length || 1)) * 100)}%</span></div></div></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-2xl font-black uppercase tracking-tighter mb-8 text-slate-900">Tribe Master Roster</h4><div class="overflow-x-auto"><table class="w-full text-left"><thead><tr class="text-[11px] font-black text-slate-300 uppercase tracking-widest border-b border-slate-50"><th class="pb-6">Name</th><th class="pb-6">Role</th><th class="pb-6">Assignment</th><th class="pb-6">Seniority</th><th class="pb-6 text-right">Status</th></tr></thead><tbody>${tribeMbs.map(m => `<tr class="group border-b border-slate-50/50"><td class="py-5"><span class="font-bold text-slate-800 block">${m.name}</span>${m.leadershipTitle ? `<span class="text-[8px] font-black text-indigo-500 uppercase tracking-widest">${m.leadershipTitle}</span>` : ''}</td><td class="py-5"><span class="px-3 py-1 rounded-xl text-[10px] font-black uppercase ${getRoleColorClass(m.role)}">${m.role}</span></td><td class="py-5"><span class="text-[10px] font-black text-slate-400 uppercase tracking-tighter">${m.tribe === managedTribeContext.name ? m.squad : `Coverage`}</span></td><td class="py-5 font-mono text-xs text-slate-400">${m.level}</td><td class="py-5 text-right"><span class="text-[10px] font-black uppercase ${m.status === 'Hired' ? 'text-emerald-500' : 'text-amber-500'}">${m.status}</span></td></tr>`).join('')}</tbody></table></div></div>`;
+            const hiredCount = tribeMbs.filter(p => p.status === 'Hired').length;
+            const openCount = tribeMbs.filter(p => p.status === 'Open' || p.status === 'Hiring').length;
+            
+            container.innerHTML = `
+                <div class="flex items-center gap-4 mb-10">
+                    <button onclick="window.setTab('tribes')" class="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-slate-400 hover:text-[#ff5a00] hover:shadow-lg transition-all">
+                        <i class="fa-solid fa-arrow-left"></i>
+                    </button>
+                    <div>
+                        <h2 class="text-4xl font-black uppercase tracking-tighter">${managedTribeContext.name} Orchestration</h2>
+                        <p class="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">Full Tribe Management</p>
+                    </div>
+                </div>
+                
+                <div class="grid lg:grid-cols-3 gap-8 mb-12">
+                    <div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
+                        <h4 class="text-[11px] font-black uppercase text-indigo-500 mb-6 tracking-widest">Aggregate Leverage</h4>
+                        <div class="space-y-6">
+                            <div class="flex justify-between items-end">
+                                <div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : PM</p><h3 class="text-3xl font-black">${ratios.engPm}:1</h3></div>
+                                <div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.pm.min}-${config.ratios.pm.max}</div>
+                            </div>
+                            <div class="flex justify-between items-end pt-4 border-t border-slate-50">
+                                <div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : Design</p><h3 class="text-3xl font-black">${ratios.engPd}:1</h3></div>
+                                <div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.design.min}-${config.ratios.design.max}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
+                        <h4 class="text-[11px] font-black uppercase text-emerald-500 mb-6 tracking-widest">Tribe Composition</h4>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Engineering</p><h3 class="text-2xl font-black">${counts.eng}</h3></div>
+                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Product</p><h3 class="text-2xl font-black">${counts.pm}</h3></div>
+                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Design</p><h3 class="text-2xl font-black">${counts.pd}</h3></div>
+                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Data</p><h3 class="text-2xl font-black">${counts.da}</h3></div>
+                        </div>
+                    </div>
+                    <div class="bg-slate-900 p-10 rounded-[48px] shadow-2xl text-white">
+                        <h4 class="text-[11px] font-black uppercase opacity-40 mb-6 tracking-widest">Tribe Summary</h4>
+                        <div class="space-y-4">
+                            <div class="flex justify-between border-b border-white/10 pb-4">
+                                <span class="text-[10px] uppercase opacity-60">Primary FTE</span>
+                                <span class="font-black">${personnel.filter(p => p.tribe === managedTribeContext.name && p.status !== 'Resigned').length}</span>
+                            </div>
+                            <div class="flex justify-between border-b border-white/10 pb-4">
+                                <span class="text-[10px] uppercase opacity-60">Total Active</span>
+                                <span class="font-black">${tribeMbs.length}</span>
+                            </div>
+                            <div class="flex justify-between pb-2">
+                                <span class="text-[10px] uppercase opacity-60">Filled Ratio</span>
+                                <span class="font-black text-emerald-400">${Math.round((hiredCount / (tribeMbs.length || 1)) * 100)}%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm">
+                    <h4 class="text-2xl font-black uppercase tracking-tighter mb-8 text-slate-900">Tribe Master Roster</h4>
+                    
+                    <!-- Search and Sort Controls -->
+                    <div class="mb-6 flex items-center gap-4">
+                        <div class="relative flex-1">
+                            <i class="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 text-sm"></i>
+                            <input type="text" placeholder="Search tribe members..." oninput="window.updateTribeManageFilter('search', this.value)" class="w-full bg-slate-50 border-none rounded-2xl pl-12 pr-4 py-3 font-medium text-sm">
+                        </div>
+                        <div class="flex items-center gap-2 bg-slate-50 rounded-2xl px-4 py-3">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Sort:</span>
+                            <select onchange="window.updateTribeManageFilter('sortBy', this.value)" class="bg-transparent border-none text-[10px] font-black uppercase cursor-pointer p-0">
+                                <option value="name">Name</option>
+                                <option value="role">Role</option>
+                                <option value="squad">Squad</option>
+                                <option value="level">Level</option>
+                                <option value="status">Status</option>
+                            </select>
+                            <button onclick="window.toggleTribeManageSort()" class="text-slate-400 hover:text-slate-900">
+                                <i class="fa-solid fa-arrow-down-a-z text-sm" id="tribe-sort-icon"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <p class="text-sm text-slate-500 font-medium mb-4">
+                        <i class="fa-solid fa-info-circle text-[#ff5a00] mr-2"></i>
+                        Click any row to edit details
+                    </p>
+                    
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead>
+                                <tr class="text-[11px] font-black text-slate-300 uppercase tracking-widest border-b border-slate-50">
+                                    <th class="pb-6">Name</th>
+                                    <th class="pb-6">Role</th>
+                                    <th class="pb-6">Assignment</th>
+                                    <th class="pb-6">Seniority</th>
+                                    <th class="pb-6 text-right">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${tribeMbs.map(m => `
+                                    <tr class="group border-b border-slate-50/50 hover:bg-slate-50 cursor-pointer transition-colors" onclick="window.openRosterEditModal('${m.id}')">
+                                        <td class="py-5">
+                                            <span class="font-bold text-slate-800 block">${m.name}</span>
+                                            ${m.leadershipTitle ? `<span class="text-[8px] font-black text-indigo-500 uppercase tracking-widest">${m.leadershipTitle}</span>` : ''}
+                                        </td>
+                                        <td class="py-5">
+                                            <span class="px-3 py-1 rounded-xl text-[10px] font-black uppercase ${getRoleColorClass(m.role)}">${m.role}</span>
+                                        </td>
+                                        <td class="py-5">
+                                            <span class="text-[10px] font-black text-slate-400 uppercase tracking-tighter">${m.tribe === managedTribeContext.name ? m.squad : 'Coverage'}</span>
+                                        </td>
+                                        <td class="py-5 font-mono text-xs text-slate-400">${m.level || 'N/A'}</td>
+                                        <td class="py-5 text-right">
+                                            <span class="text-[10px] font-black uppercase ${m.status === 'Hired' ? 'text-emerald-500' : m.status === 'Resigned' ? 'text-slate-400' : 'text-amber-500'}">${m.status}</span>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="mt-8 pt-6 border-t border-slate-100">
+                        <div class="flex items-center gap-6 text-sm">
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                                <span class="font-bold text-slate-700">${hiredCount} Hired</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 rounded-full bg-amber-500"></div>
+                                <span class="font-bold text-slate-700">${openCount} Open</span>
+                            </div>
+                            <div class="h-4 w-px bg-slate-200"></div>
+                            <span class="text-slate-500 font-medium">${tribeMbs.length} Total</span>
+                        </div>
+                    </div>
+                </div>
+            `;
         };
 
         const renderSquadManage = () => {
             const container = document.getElementById('squad-manage-view-content');
             if (!container || !managedSquadContext.squad) return;
-            const squadMbs = personnel.filter(p => p.tribe === managedSquadContext.tribe && p.squad === managedSquadContext.squad && p.status !== 'Resigned');
+            
+            let squadMbs = personnel.filter(p => p.tribe === managedSquadContext.tribe && p.squad === managedSquadContext.squad && p.status !== 'Resigned');
+            
+            // Apply search filter
+            if (squadManageFilters.search) {
+                const searchTerm = squadManageFilters.search.toLowerCase();
+                squadMbs = squadMbs.filter(p => 
+                    (p.name || '').toLowerCase().includes(searchTerm) ||
+                    (p.role || '').toLowerCase().includes(searchTerm) ||
+                    (p.level || '').toLowerCase().includes(searchTerm)
+                );
+            }
+            
+            // Apply sorting
+            squadMbs.sort((a, b) => {
+                let aVal, bVal;
+                switch(squadManageFilters.sortBy) {
+                    case 'name':
+                        aVal = (a.name || '').toLowerCase();
+                        bVal = (b.name || '').toLowerCase();
+                        break;
+                    case 'role':
+                        aVal = (a.role || '').toLowerCase();
+                        bVal = (b.role || '').toLowerCase();
+                        break;
+                    case 'level':
+                        aVal = (a.level || '').toLowerCase();
+                        bVal = (b.level || '').toLowerCase();
+                        break;
+                    case 'status':
+                        aVal = (a.status || '').toLowerCase();
+                        bVal = (b.status || '').toLowerCase();
+                        break;
+                    default:
+                        aVal = (a.name || '').toLowerCase();
+                        bVal = (b.name || '').toLowerCase();
+                }
+                
+                if (squadManageFilters.sortOrder === 'asc') {
+                    return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+                } else {
+                    return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
+                }
+            });
+            
             const hiredCount = squadMbs.filter(p => p.status === 'Hired').length;
             const openCount = squadMbs.filter(p => p.status === 'Open' || p.status === 'Hiring').length;
             const counts = getRoleCounts(squadMbs);
             const ratios = getLeverageRatios(squadMbs);
-            container.innerHTML = `<div class="flex items-center gap-4 mb-10"><button onclick="window.setTab('tribes')" class="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-slate-400 hover:text-[#ff5a00] hover:shadow-lg transition-all"><i class="fa-solid fa-arrow-left"></i></button><div><h2 class="text-4xl font-black uppercase tracking-tighter">${managedSquadContext.squad} Dashboard</h2><p class="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">${managedSquadContext.tribe} Tribe</p></div></div><div class="grid lg:grid-cols-3 gap-8 mb-12"><div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase text-indigo-500 mb-6 tracking-widest">Leverage Ratios</h4><div class="space-y-6"><div class="flex justify-between items-end"><div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : PM</p><h3 class="text-3xl font-black">${ratios.engPm}:1</h3></div><div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.pm.min}-${config.ratios.pm.max}</div></div><div class="flex justify-between items-end pt-4 border-t border-slate-50"><div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : Design</p><h3 class="text-3xl font-black">${ratios.engPd}:1</h3></div><div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.design.min}-${config.ratios.design.max}</div></div></div></div><div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm"><h4 class="text-[11px] font-black uppercase text-emerald-500 mb-6 tracking-widest">Composition</h4><div class="grid grid-cols-2 gap-4"><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng</p><h3 class="text-2xl font-black">${counts.eng}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">PM</p><h3 class="text-2xl font-black">${counts.pm}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Design</p><h3 class="text-2xl font-black">${counts.pd}</h3></div><div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Data</p><h3 class="text-2xl font-black">${counts.da}</h3></div></div></div><div class="bg-[#ff5a00] p-10 rounded-[48px] shadow-2xl shadow-orange-100 text-white"><h4 class="text-[11px] font-black uppercase opacity-60 mb-6 tracking-widest">Orchestration</h4><p class="text-lg font-medium leading-tight mb-8">Manage squad assignments and operational health directly from this dashboard.</p><button onclick="window.openEntryModal()" class="w-full bg-white text-[#ff5a00] py-4 rounded-2xl font-black uppercase text-xs tracking-widest">Add New Seat</button></div></div><div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm"><h4 class="text-2xl font-black uppercase tracking-tighter mb-8 text-slate-900">Squad Roster</h4><div class="overflow-x-auto"><table class="w-full text-left"><thead><tr class="text-[11px] font-black text-slate-300 uppercase tracking-widest border-b border-slate-50"><th class="pb-6">Name</th><th class="pb-6">Role</th><th class="pb-6">Seniority</th><th class="pb-6 text-right">Status</th></tr></thead><tbody>${squadMbs.map(m => `<tr class="group border-b border-slate-50/50"><td class="py-5 font-bold text-slate-800"><input type="text" value="${m.name}" onchange="window.updateMemberField('${m.id}', 'name', this.value)" class="bg-transparent border-none focus:ring-0 w-full font-bold"></td><td class="py-5"><span class="px-3 py-1 rounded-xl text-[10px] font-black uppercase ${getRoleColorClass(m.role)}">${m.role}</span></td><td class="py-5 font-mono text-xs text-slate-400">${m.level}</td><td class="py-5 text-right"><div class="flex items-center justify-end gap-4"><span class="text-[10px] font-black uppercase ${m.status === 'Hired' ? 'text-emerald-500' : m.status === 'Resigned' ? 'text-slate-400' : 'text-amber-500'}">${m.status}</span><button onclick="window.deleteHeadcount('${m.id}')" class="text-slate-200 hover:text-red-500 transition-colors"><i class="fa-solid fa-trash-can text-xs"></i></button></div></td></tr>`).join('')}</tbody></table></div><div class="mt-8 pt-6 border-t border-slate-100"><div class="flex items-center gap-6 text-sm"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-emerald-500"></div><span class="font-bold text-slate-700">${hiredCount} Hired</span></div><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-amber-500"></div><span class="font-bold text-slate-700">${openCount} Open</span></div><div class="h-4 w-px bg-slate-200"></div><span class="text-slate-500 font-medium">${squadMbs.length} Total</span></div></div></div>`;
+            
+            container.innerHTML = `
+                <div class="flex items-center gap-4 mb-10">
+                    <button onclick="window.setTab('tribes')" class="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-slate-400 hover:text-[#ff5a00] hover:shadow-lg transition-all">
+                        <i class="fa-solid fa-arrow-left"></i>
+                    </button>
+                    <div>
+                        <h2 class="text-4xl font-black uppercase tracking-tighter">${managedSquadContext.squad} Dashboard</h2>
+                        <p class="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">${managedSquadContext.tribe} Tribe</p>
+                    </div>
+                </div>
+                
+                <div class="grid lg:grid-cols-3 gap-8 mb-12">
+                    <div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
+                        <h4 class="text-[11px] font-black uppercase text-indigo-500 mb-6 tracking-widest">Leverage Ratios</h4>
+                        <div class="space-y-6">
+                            <div class="flex justify-between items-end">
+                                <div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : PM</p><h3 class="text-3xl font-black">${ratios.engPm}:1</h3></div>
+                                <div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.pm.min}-${config.ratios.pm.max}</div>
+                            </div>
+                            <div class="flex justify-between items-end pt-4 border-t border-slate-50">
+                                <div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : Design</p><h3 class="text-3xl font-black">${ratios.engPd}:1</h3></div>
+                                <div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.design.min}-${config.ratios.design.max}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
+                        <h4 class="text-[11px] font-black uppercase text-emerald-500 mb-6 tracking-widest">Composition</h4>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng</p><h3 class="text-2xl font-black">${counts.eng}</h3></div>
+                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">PM</p><h3 class="text-2xl font-black">${counts.pm}</h3></div>
+                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Design</p><h3 class="text-2xl font-black">${counts.pd}</h3></div>
+                            <div class="bg-slate-50 p-4 rounded-3xl"><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Data</p><h3 class="text-2xl font-black">${counts.da}</h3></div>
+                        </div>
+                    </div>
+                    <div class="bg-[#ff5a00] p-10 rounded-[48px] shadow-2xl shadow-orange-100 text-white">
+                        <h4 class="text-[11px] font-black uppercase opacity-60 mb-6 tracking-widest">Orchestration</h4>
+                        <p class="text-lg font-medium leading-tight mb-8">Manage squad assignments and operational health directly from this dashboard.</p>
+                        <button onclick="window.openEntryModal()" class="w-full bg-white text-[#ff5a00] py-4 rounded-2xl font-black uppercase text-xs tracking-widest">Add New Seat</button>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm">
+                    <h4 class="text-2xl font-black uppercase tracking-tighter mb-8 text-slate-900">Squad Roster</h4>
+                    
+                    <!-- Search and Sort Controls -->
+                    <div class="mb-6 flex items-center gap-4">
+                        <div class="relative flex-1">
+                            <i class="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 text-sm"></i>
+                            <input type="text" placeholder="Search squad members..." oninput="window.updateSquadManageFilter('search', this.value)" class="w-full bg-slate-50 border-none rounded-2xl pl-12 pr-4 py-3 font-medium text-sm">
+                        </div>
+                        <div class="flex items-center gap-2 bg-slate-50 rounded-2xl px-4 py-3">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Sort:</span>
+                            <select onchange="window.updateSquadManageFilter('sortBy', this.value)" class="bg-transparent border-none text-[10px] font-black uppercase cursor-pointer p-0">
+                                <option value="name">Name</option>
+                                <option value="role">Role</option>
+                                <option value="level">Level</option>
+                                <option value="status">Status</option>
+                            </select>
+                            <button onclick="window.toggleSquadManageSort()" class="text-slate-400 hover:text-slate-900">
+                                <i class="fa-solid fa-arrow-down-a-z text-sm" id="squad-sort-icon"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <p class="text-sm text-slate-500 font-medium mb-4">
+                        <i class="fa-solid fa-info-circle text-[#ff5a00] mr-2"></i>
+                        Click any row to edit details
+                    </p>
+                    
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead>
+                                <tr class="text-[11px] font-black text-slate-300 uppercase tracking-widest border-b border-slate-50">
+                                    <th class="pb-6">Name</th>
+                                    <th class="pb-6">Role</th>
+                                    <th class="pb-6">Seniority</th>
+                                    <th class="pb-6 text-right">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${squadMbs.map(m => `
+                                    <tr class="group border-b border-slate-50/50 hover:bg-slate-50 cursor-pointer transition-colors" onclick="window.openRosterEditModal('${m.id}')">
+                                        <td class="py-5 font-bold text-slate-800">${m.name}${m.leadershipTitle ? `<div class="text-[8px] font-black uppercase text-indigo-500 mt-1">${m.leadershipTitle}</div>` : ''}</td>
+                                        <td class="py-5"><span class="px-3 py-1 rounded-xl text-[10px] font-black uppercase ${getRoleColorClass(m.role)}">${m.role}</span></td>
+                                        <td class="py-5 font-mono text-xs text-slate-400">${m.level || 'N/A'}</td>
+                                        <td class="py-5 text-right">
+                                            <span class="text-[10px] font-black uppercase ${m.status === 'Hired' ? 'text-emerald-500' : m.status === 'Resigned' ? 'text-slate-400' : 'text-amber-500'}">${m.status}</span>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="mt-8 pt-6 border-t border-slate-100">
+                        <div class="flex items-center gap-6 text-sm">
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                                <span class="font-bold text-slate-700">${hiredCount} Hired</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 rounded-full bg-amber-500"></div>
+                                <span class="font-bold text-slate-700">${openCount} Open</span>
+                            </div>
+                            <div class="h-4 w-px bg-slate-200"></div>
+                            <span class="text-slate-500 font-medium">${squadMbs.length} Total</span>
+                        </div>
+                    </div>
+                </div>
+            `;
         };
 
         const renderRoster = () => {
-            const tbody = document.getElementById('roster-table-body');
-            if (!tbody) return;
-            tbody.innerHTML = '';
+            const container = document.getElementById('roster-view-content');
+            if (!container) return;
+            
+            // Enhanced filtering
             let filtered = personnel.filter(p => {
-                const matchSearch = p.name.toLowerCase().includes(rosterFilters.search.toLowerCase());
+                const searchTerm = rosterFilters.search.toLowerCase();
+                const matchSearch = 
+                    p.name.toLowerCase().includes(searchTerm) ||
+                    (p.tribe || '').toLowerCase().includes(searchTerm) ||
+                    (p.squad || '').toLowerCase().includes(searchTerm) ||
+                    (p.role || '').toLowerCase().includes(searchTerm) ||
+                    (p.leadershipTitle || '').toLowerCase().includes(searchTerm);
+                
                 const matchRole = rosterFilters.role === 'all' || p.role === rosterFilters.role;
                 const matchStatus = rosterFilters.status === 'all' || p.status === rosterFilters.status;
-                return matchSearch && matchRole && matchStatus;
+                const matchTribe = rosterFilters.tribe === 'all' || p.tribe === rosterFilters.tribe;
+                const matchSquad = rosterFilters.squad === 'all' || p.squad === rosterFilters.squad;
+                
+                return matchSearch && matchRole && matchStatus && matchTribe && matchSquad;
+            });
+            
+            // Sorting
+            filtered.sort((a, b) => {
+                let aVal, bVal;
+                switch(rosterFilters.sortBy) {
+                    case 'name':
+                        aVal = (a.name || '').toLowerCase();
+                        bVal = (b.name || '').toLowerCase();
+                        break;
+                    case 'role':
+                        aVal = (a.role || '').toLowerCase();
+                        bVal = (b.role || '').toLowerCase();
+                        break;
+                    case 'tribe':
+                        aVal = (a.tribe || '').toLowerCase();
+                        bVal = (b.tribe || '').toLowerCase();
+                        break;
+                    case 'squad':
+                        aVal = (a.squad || '').toLowerCase();
+                        bVal = (b.squad || '').toLowerCase();
+                        break;
+                    case 'status':
+                        aVal = (a.status || '').toLowerCase();
+                        bVal = (b.status || '').toLowerCase();
+                        break;
+                    default:
+                        aVal = (a.name || '').toLowerCase();
+                        bVal = (b.name || '').toLowerCase();
+                }
+                
+                if (rosterFilters.sortOrder === 'asc') {
+                    return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+                } else {
+                    return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
+                }
             });
             
             // Calculate stats for filtered results
@@ -1110,55 +1730,123 @@
             const openCount = filtered.filter(p => p.status === 'Open' || p.status === 'Hiring').length;
             const resignedCount = filtered.filter(p => p.status === 'Resigned').length;
             
-            filtered.forEach(p => {
-                const tr = document.createElement('tr');
-                tr.className = "hover:bg-slate-50 text-sm border-b border-slate-50 transition-colors cursor-pointer";
-                tr.onclick = () => window.openRosterEditModal(p.id);
-                tr.innerHTML = `
-                    <td class="py-6 px-4">
-                        <div class="font-bold text-slate-800">${p.name}</div>
-                        ${p.leadershipTitle ? `<div class="text-[8px] font-black uppercase text-indigo-500 mt-1">${p.leadershipTitle}</div>` : ''}
-                    </td>
-                    <td class="py-6">
-                        <span class="px-3 py-1 rounded-xl text-[10px] font-black uppercase ${getRoleColorClass(p.role)}">${p.role}</span>
-                    </td>
-                    <td class="py-6">
-                        <span class="font-mono text-xs text-slate-600">${p.level || 'N/A'}</span>
-                    </td>
-                    <td class="py-6">
-                        <div class="text-sm font-bold text-slate-700">${p.tribe || 'N/A'} / ${p.squad || 'N/A'}</div>
-                    </td>
-                    <td class="py-6 text-right px-4">
-                        <span class="text-[10px] font-black uppercase ${p.status === 'Hired' ? 'text-emerald-500' : p.status === 'Hiring' ? 'text-amber-500' : p.status === 'Resigned' ? 'text-slate-400' : 'text-slate-400'}">${p.status}</span>
-                    </td>
-                `;
-                tbody.appendChild(tr);
-            });
-            
-            // Update stats display
-            const statsEl = document.getElementById('roster-stats');
-            if (statsEl) {
-                statsEl.innerHTML = `
-                    <div class="flex items-center gap-6 text-sm">
-                        <div class="flex items-center gap-2">
-                            <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
-                            <span class="font-bold text-slate-700">${hiredCount} Hired</span>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <div class="w-2 h-2 rounded-full bg-amber-500"></div>
-                            <span class="font-bold text-slate-700">${openCount} Open</span>
-                        </div>
-                        ${resignedCount > 0 ? `
-                        <div class="flex items-center gap-2">
-                            <div class="w-2 h-2 rounded-full bg-slate-400"></div>
-                            <span class="font-bold text-slate-400">${resignedCount} Resigned</span>
-                        </div>
-                        ` : ''}
-                        <div class="h-4 w-px bg-slate-200"></div>
-                        <span class="text-slate-500 font-medium">${filtered.length} Total</span>
+            // Render the entire view
+            container.innerHTML = `
+                <div class="bg-white rounded-[56px] p-16 border border-slate-100 shadow-sm">
+                    <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 mb-12">
+                        <h2 class="text-4xl font-black uppercase text-slate-900 tracking-tighter">Master Roster</h2>
+                        <button onclick="window.openEntryModal()" class="bg-[#ff5a00] text-white px-8 py-4 rounded-3xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-orange-100 hover:scale-105 active:scale-95 transition-all">Add Headcount</button>
                     </div>
-                `;
-            }
+                    
+                    <!-- Search and Filters -->
+                    <div class="mb-8 space-y-4">
+                        <div class="flex flex-wrap items-center gap-4">
+                            <div class="relative flex-1 min-w-[300px]">
+                                <i class="fa-solid fa-magnifying-glass absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 text-sm"></i>
+                                <input type="text" placeholder="Search name, role, tribe, squad..." value="${rosterFilters.search}" oninput="window.updateRosterFilter('search', this.value)" class="w-full bg-slate-50 border-none rounded-2xl pl-14 pr-6 py-4 font-bold text-sm focus:ring-2 focus:ring-indigo-100 transition-all">
+                            </div>
+                            <select onchange="window.updateRosterFilter('role', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer">
+                                <option value="all">All Roles</option>
+                                ${config.roles.map(r => `<option value="${r}" ${rosterFilters.role === r ? 'selected' : ''}>${r}</option>`).join('')}
+                            </select>
+                            <select onchange="window.updateRosterFilter('status', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer">
+                                <option value="all">All Status</option>
+                                <option value="Hired" ${rosterFilters.status === 'Hired' ? 'selected' : ''}>Hired</option>
+                                <option value="Hiring" ${rosterFilters.status === 'Hiring' ? 'selected' : ''}>Hiring</option>
+                                <option value="Open" ${rosterFilters.status === 'Open' ? 'selected' : ''}>Open</option>
+                                <option value="Resigned" ${rosterFilters.status === 'Resigned' ? 'selected' : ''}>Resigned</option>
+                            </select>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-4">
+                            <select onchange="window.updateRosterFilter('tribe', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer">
+                                <option value="all">All Tribes</option>
+                                ${tribes.map(t => `<option value="${t.name}" ${rosterFilters.tribe === t.name ? 'selected' : ''}>${t.name}</option>`).join('')}
+                            </select>
+                            <select onchange="window.updateRosterFilter('squad', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer">
+                                <option value="all">All Squads</option>
+                                ${[...new Set(tribes.flatMap(t => t.squads || []))].map(s => `<option value="${s}" ${rosterFilters.squad === s ? 'selected' : ''}>${s}</option>`).join('')}
+                            </select>
+                            <div class="flex items-center gap-2 bg-slate-50 rounded-2xl px-6 py-4">
+                                <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Sort:</span>
+                                <select onchange="window.updateRosterFilter('sortBy', this.value)" class="bg-transparent border-none text-[10px] font-black uppercase tracking-widest cursor-pointer p-0">
+                                    <option value="name" ${rosterFilters.sortBy === 'name' ? 'selected' : ''}>Name</option>
+                                    <option value="role" ${rosterFilters.sortBy === 'role' ? 'selected' : ''}>Role</option>
+                                    <option value="tribe" ${rosterFilters.sortBy === 'tribe' ? 'selected' : ''}>Tribe</option>
+                                    <option value="squad" ${rosterFilters.sortBy === 'squad' ? 'selected' : ''}>Squad</option>
+                                    <option value="status" ${rosterFilters.sortBy === 'status' ? 'selected' : ''}>Status</option>
+                                </select>
+                                <button onclick="window.toggleRosterSort()" class="text-slate-400 hover:text-slate-900 transition-colors">
+                                    <i class="fa-solid ${rosterFilters.sortOrder === 'asc' ? 'fa-arrow-down-a-z' : 'fa-arrow-up-z-a'} text-sm" id="roster-sort-icon"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-6">
+                        <p class="text-sm text-slate-500 font-medium">
+                            <i class="fa-solid fa-info-circle text-[#ff5a00] mr-2"></i>
+                            Click any row to edit details
+                        </p>
+                    </div>
+                    
+                    <div class="overflow-x-auto no-scrollbar">
+                        <table class="w-full text-left">
+                            <thead>
+                                <tr class="text-[12px] font-black text-slate-400 uppercase tracking-[0.25em] border-b border-slate-50">
+                                    <th class="pb-10 px-4">Name</th>
+                                    <th class="pb-10">Role</th>
+                                    <th class="pb-10">Level</th>
+                                    <th class="pb-10">Tribe / Squad</th>
+                                    <th class="pb-10 text-right px-4">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${filtered.map(p => `
+                                    <tr class="hover:bg-slate-50 text-sm border-b border-slate-50 transition-colors cursor-pointer" onclick="window.openRosterEditModal('${p.id}')">
+                                        <td class="py-6 px-4">
+                                            <div class="font-bold text-slate-800">${p.name}</div>
+                                            ${p.leadershipTitle ? `<div class="text-[8px] font-black uppercase text-indigo-500 mt-1">${p.leadershipTitle}</div>` : ''}
+                                        </td>
+                                        <td class="py-6">
+                                            <span class="px-3 py-1 rounded-xl text-[10px] font-black uppercase ${getRoleColorClass(p.role)}">${p.role}</span>
+                                        </td>
+                                        <td class="py-6">
+                                            <span class="font-mono text-xs text-slate-600">${p.level || 'N/A'}</span>
+                                        </td>
+                                        <td class="py-6">
+                                            <div class="text-sm font-bold text-slate-700">${p.tribe || 'N/A'} / ${p.squad || 'N/A'}</div>
+                                        </td>
+                                        <td class="py-6 text-right px-4">
+                                            <span class="text-[10px] font-black uppercase ${p.status === 'Hired' ? 'text-emerald-500' : p.status === 'Hiring' ? 'text-amber-500' : p.status === 'Resigned' ? 'text-slate-400' : 'text-slate-400'}">${p.status}</span>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="mt-8 pt-6 border-t border-slate-100">
+                        <div class="flex items-center gap-6 text-sm">
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                                <span class="font-bold text-slate-700">${hiredCount} Hired</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 rounded-full bg-amber-500"></div>
+                                <span class="font-bold text-slate-700">${openCount} Open</span>
+                            </div>
+                            ${resignedCount > 0 ? `
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 rounded-full bg-slate-400"></div>
+                                <span class="font-bold text-slate-400">${resignedCount} Resigned</span>
+                            </div>
+                            ` : ''}
+                            <div class="h-4 w-px bg-slate-200"></div>
+                            <span class="text-slate-500 font-medium">${filtered.length} Total</span>
+                        </div>
+                    </div>
+                </div>
+            `;
         };
 
         const renderInsights = () => {
@@ -1288,8 +1976,12 @@
         const renderConfig = () => {
             const container = document.getElementById('config-view-content');
             if (!container) return;
+            
+            const currentUserEmail = user?.email || '';
+            const isCurrentUserAdmin = accessControl.admins.includes(currentUserEmail);
+            
             container.innerHTML = `
-                <div class="grid lg:grid-cols-2 gap-10">
+                <div class="grid lg:grid-cols-3 gap-10">
                     <div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm">
                         <h2 class="text-3xl font-black uppercase mb-10 text-slate-900">Global Strategy</h2>
                         <div class="space-y-12">
@@ -1301,7 +1993,6 @@
                                 <div class="space-y-8">
                                     <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-indigo-500 uppercase">Leadership Titles</p><button onclick="window.addConfigItem('leadershipTitles')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${config.leadershipTitles.map(r => `<span class="bg-[#ff5a00] text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${r}<i onclick="window.removeConfigItem('leadershipTitles', '${r}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
                                     
-                                    <!-- ✅ NEW: Categories -->
                                     <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-slate-900 uppercase">Tribe Categories</p><button onclick="window.addConfigItem('categories')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${(config.categories || []).map(c => `<span class="bg-[#ff5a00] text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${c}<i onclick="window.removeConfigItem('categories', '${c}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
 
                                     <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-slate-900 uppercase">Job Families</p><button onclick="window.addConfigItem('roles')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${config.roles.map(r => `<span class="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${r}<i onclick="window.removeConfigItem('roles', '${r}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
@@ -1336,6 +2027,103 @@
                                     <div class="flex flex-wrap gap-2">${(t.squads || []).map(s => `<span class="bg-white border border-slate-100 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 shadow-sm"><input type="text" value="${s}" onchange="window.updateSquadName('${t.id}', '${t.name}', '${s}', this.value, ${JSON.stringify(t.squads || []).replace(/"/g, '&quot;')})" class="bg-transparent border-none p-0 focus:ring-0 text-[10px] font-black uppercase text-slate-700 w-24"><div class="flex items-center gap-2 ml-1"><i onclick="window.moveSquad('${t.id}', '${t.name}', '${s}', ${JSON.stringify(t.squads || []).replace(/"/g, '&quot;')})" class="fa-solid fa-right-left cursor-pointer opacity-20 hover:opacity-100 hover:text-[#ff5a00]"></i><i onclick="window.deleteSquad('${t.id}', '${s}', ${JSON.stringify(t.squads || []).replace(/"/g, '&quot;')})" class="fa-solid fa-times cursor-pointer opacity-20 hover:opacity-100 hover:text-red-500"></i></div></span>`).join('')}</div>
                                 </div>
                             `).join('')}
+                        </div>
+                    </div>
+                    
+                    <!-- Access Control Section -->
+                    <div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm">
+                        <h2 class="text-3xl font-black uppercase mb-4 text-slate-900">Access Control</h2>
+                        <p class="text-sm text-slate-500 mb-8">Manage who can view and edit this workspace</p>
+                        
+                        <!-- Current User Info -->
+                        <div class="mb-8 p-4 rounded-2xl ${isCurrentUserAdmin ? 'bg-emerald-50 border border-emerald-100' : 'bg-blue-50 border border-blue-100'}">
+                            <div class="flex items-center gap-2 mb-1">
+                                <i class="fa-solid fa-user text-xs ${isCurrentUserAdmin ? 'text-emerald-600' : 'text-blue-600'}"></i>
+                                <span class="text-[10px] font-black uppercase tracking-widest ${isCurrentUserAdmin ? 'text-emerald-600' : 'text-blue-600'}">You are logged in as</span>
+                            </div>
+                            <p class="font-bold text-slate-900 text-sm">${currentUserEmail}</p>
+                            <span class="inline-block mt-2 px-3 py-1 rounded-full text-[9px] font-black uppercase ${isCurrentUserAdmin ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}">${isCurrentUserAdmin ? 'Admin' : 'Viewer'}</span>
+                        </div>
+
+                        <!-- Admins Section -->
+                        <div class="mb-8">
+                            <div class="flex justify-between items-center mb-4">
+                                <div>
+                                    <h4 class="text-[11px] font-black uppercase text-emerald-500 tracking-widest">Admins</h4>
+                                    <p class="text-[9px] text-slate-400 mt-1">Full read & write access</p>
+                                </div>
+                                ${isCurrentUserAdmin ? `<button onclick="window.addAdmin()" class="bg-[#ff5a00] text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest">Add Admin</button>` : ''}
+                            </div>
+                            <div class="space-y-2">
+                                ${accessControl.admins.length === 0 ? `
+                                    <div class="text-center py-6 bg-slate-50 rounded-2xl">
+                                        <p class="text-xs text-slate-400">No admins configured</p>
+                                    </div>
+                                ` : accessControl.admins.map(email => `
+                                    <div class="flex items-center justify-between p-3 rounded-2xl border border-slate-100 hover:border-emerald-100 bg-slate-50 hover:bg-emerald-50 transition-all">
+                                        <div class="flex items-center gap-3 min-w-0">
+                                            <div class="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                                                <i class="fa-solid fa-shield-halved text-emerald-600 text-xs"></i>
+                                            </div>
+                                            <span class="font-bold text-slate-700 text-sm truncate">${email}</span>
+                                            ${email === currentUserEmail ? `<span class="text-[8px] font-black uppercase text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full">You</span>` : ''}
+                                        </div>
+                                        ${isCurrentUserAdmin && email !== currentUserEmail ? `
+                                            <button onclick="window.removeAdmin('${email}')" class="text-slate-300 hover:text-red-500 transition-colors ml-2">
+                                                <i class="fa-solid fa-times text-xs"></i>
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <!-- Viewers Section -->
+                        <div>
+                            <div class="flex justify-between items-center mb-4">
+                                <div>
+                                    <h4 class="text-[11px] font-black uppercase text-blue-500 tracking-widest">Viewers</h4>
+                                    <p class="text-[9px] text-slate-400 mt-1">Read-only access</p>
+                                </div>
+                                ${isCurrentUserAdmin ? `<button onclick="window.addViewer()" class="bg-[#ff5a00] text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest">Add Viewer</button>` : ''}
+                            </div>
+                            <div class="space-y-2">
+                                ${accessControl.viewers.length === 0 ? `
+                                    <div class="text-center py-6 bg-slate-50 rounded-2xl">
+                                        <p class="text-xs text-slate-400">No viewers configured</p>
+                                    </div>
+                                ` : accessControl.viewers.map(email => `
+                                    <div class="flex items-center justify-between p-3 rounded-2xl border border-slate-100 hover:border-blue-100 bg-slate-50 hover:bg-blue-50 transition-all">
+                                        <div class="flex items-center gap-3 min-w-0">
+                                            <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                                <i class="fa-solid fa-eye text-blue-600 text-xs"></i>
+                                            </div>
+                                            <span class="font-bold text-slate-700 text-sm truncate">${email}</span>
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            ${isCurrentUserAdmin ? `
+                                                <button onclick="window.promoteToAdmin('${email}')" class="text-emerald-500 hover:text-emerald-600 transition-colors" title="Promote to admin">
+                                                    <i class="fa-solid fa-arrow-up text-xs"></i>
+                                                </button>
+                                                <button onclick="window.removeViewer('${email}')" class="text-slate-300 hover:text-red-500 transition-colors">
+                                                    <i class="fa-solid fa-times text-xs"></i>
+                                                </button>
+                                            ` : ''}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <!-- Firebase Rules Info -->
+                        <div class="mt-8 p-4 rounded-2xl bg-amber-50 border border-amber-100">
+                            <div class="flex items-start gap-3">
+                                <i class="fa-solid fa-info-circle text-amber-600 text-sm mt-0.5"></i>
+                                <div>
+                                    <h5 class="text-[10px] font-black uppercase text-amber-700 mb-2">Firebase Security</h5>
+                                    <p class="text-[10px] text-amber-700 leading-relaxed">Access is enforced via Firebase Security Rules. Only emails listed above can access this data. Update your Firebase rules to match these lists.</p>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1420,7 +2208,14 @@
                 <div onclick="window.setTab('logs')" data-tab="logs" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Logs</div>
                 <div onclick="window.setTab('config')" data-tab="config" class="nav-tab text-slate-400 px-8 py-3.5 text-[12px] font-black uppercase tracking-tight">Config</div>
             </div>
-            <div class="flex items-center gap-6"><button onclick="window.openEntryModal()" class="bg-[#ff5a00] text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-orange-100">New Entry</button><button id="logout-btn" class="w-12 h-12 rounded-2xl bg-slate-50 text-slate-400 hover:text-red-500 flex items-center justify-center transition-colors"><i class="fa-solid fa-right-from-bracket text-sm"></i></button></div>
+            <div class="flex items-center gap-6">
+                <button onclick="window.exportToExcel()" class="bg-emerald-600 text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-colors flex items-center gap-2">
+                    <i class="fa-solid fa-file-excel"></i>
+                    Export Excel
+                </button>
+                <button onclick="window.openEntryModal()" class="bg-[#ff5a00] text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-orange-100">New Entry</button>
+                <button id="logout-btn" class="w-12 h-12 rounded-2xl bg-slate-50 text-slate-400 hover:text-red-500 flex items-center justify-center transition-colors"><i class="fa-solid fa-right-from-bracket text-sm"></i></button>
+            </div>
         </nav>
 
         <main class="pt-40 pb-24 px-12 max-w-[1800px] mx-auto">
@@ -1438,7 +2233,9 @@
             <div id="insights-view" class="tab-view hidden"><div id="insights-view-content"></div></div>
             <div id="logs-view" class="tab-view hidden"><div id="logs-view-content"></div></div>
             <div id="config-view" class="tab-view hidden"><div id="config-view-content"></div></div>
-            <div id="roster-view" class="tab-view hidden"><div class="bg-white rounded-[56px] p-16 border border-slate-100 shadow-sm"><div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 mb-12"><h2 class="text-4xl font-black uppercase text-slate-900 tracking-tighter">Master Roster</h2><div class="flex flex-wrap items-center gap-4 w-full lg:w-auto"><div class="relative flex-1 lg:min-w-[300px]"><i class="fa-solid fa-magnifying-glass absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 text-sm"></i><input type="text" placeholder="Search..." oninput="window.updateRosterFilter('search', this.value)" class="w-full bg-slate-50 border-none rounded-2xl pl-14 pr-6 py-4 font-bold text-sm focus:ring-2 focus:ring-indigo-100 transition-all"></div><select onchange="window.updateRosterFilter('role', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer"><option value="all">All Roles</option><option value="Engineering">Engineering</option><option value="Product Management">Product Management</option><option value="Product Design">Product Design</option><option value="Data Science">Data Science</option></select><select onchange="window.updateRosterFilter('status', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer"><option value="all">All Status</option><option value="Hired">Hired</option><option value="Hiring">Hiring</option><option value="Open">Open</option><option value="Resigned">Resigned</option></select><button onclick="window.openEntryModal()" class="bg-[#ff5a00] text-white px-8 py-4 rounded-3xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-orange-100 hover:scale-105 active:scale-95 transition-all">Add Headcount</button></div></div><div class="mb-6"><p class="text-sm text-slate-500 font-medium"><i class="fa-solid fa-info-circle text-[#ff5a00] mr-2"></i>Click any row to edit details</p></div><div class="overflow-x-auto no-scrollbar"><table class="w-full text-left"><thead><tr class="text-[12px] font-black text-slate-400 uppercase tracking-[0.25em] border-b border-slate-50"><th class="pb-10 px-4">Name</th><th class="pb-10">Role</th><th class="pb-10">Level</th><th class="pb-10">Tribe / Squad</th><th class="pb-10 text-right px-4">Status</th></tr></thead><tbody id="roster-table-body"></tbody></table></div><div class="mt-8 pt-6 border-t border-slate-100" id="roster-stats"></div></div></div>
+            <div id="roster-view" class="tab-view hidden">
+                <div id="roster-view-content"></div>
+            </div>
         </main>
     </div>
 
