@@ -813,7 +813,10 @@
             roleSelect.innerHTML = config.roles.map(r => `<option value="${r}">${r}</option>`).join('');
             roleSelect.value = person.role || config.roles[0];
             
-            document.getElementById('edit-person-level').value = person.level || '';
+            // Populate and select level dropdown
+            const levelSelect = document.getElementById('edit-person-level');
+            levelSelect.innerHTML = `<option value="">N/A</option>` + config.levels.map(l => `<option value="${l}">${l}</option>`).join('');
+            levelSelect.value = person.level || '';
             
             // Populate and select tribe dropdown
             const tribeSelect = document.getElementById('edit-person-tribe');
@@ -2918,16 +2921,7 @@
                     <div>
                         <label class="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Level</label>
                         <select id="edit-person-level" class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 font-bold">
-                            <option value="">N/A</option>
-                            <option value="IC1">IC1</option>
-                            <option value="IC2">IC2</option>
-                            <option value="IC3">IC3</option>
-                            <option value="IC4">IC4</option>
-                            <option value="IC5">IC5</option>
-                            <option value="M1">M1</option>
-                            <option value="M2">M2</option>
-                            <option value="M3">M3</option>
-                            <option value="M4">M4</option>
+                            <!-- Options populated dynamically from config.levels -->
                         </select>
                     </div>
                 </div>
