@@ -52,11 +52,11 @@
             },
             compositions: {
                 eng: { val: 65, label: "Eng" },
-                prod: { val: 15, label: "Product Management" },
-                design: { val: 12, label: "Product Design" },
+                prod: { val: 15, label: "PM" },
+                design: { val: 12, label: "PD" },
                 data: { val: 8, label: "Data & Insights" }
             },
-            roles: ["Eng", "Product Management", "Product Design", "Data Science", "Data Engineering"],
+            roles: ["Eng", "PM", "PD", "DS", "Data Engineering"],
             levels: ["IC1", "IC2", "IC3", "IC4", "IC5", "M1", "M2", "M3", "M4"],
             leadershipTitles: ["Tribe Lead", "Function Head", "Group Lead", "Lead"]
         };
@@ -1181,8 +1181,12 @@
         const getFunctionKey = (role) => {
             const r = role.toLowerCase();
             if (r.includes('eng') && !r.includes('data')) return 'eng';
-            if (r.includes('prod') && r.includes('manage')) return 'prod';
-            if (r.includes('prod') && r.includes('design')) return 'design';
+            if (r.includes('prod') && r.includes('manage')) return 'prod'; // Product Management (legacy)
+            if (r === 'pm') return 'prod'; // PM (new)
+            if (r.includes('prod') && r.includes('design')) return 'design'; // Product Design (legacy)
+            if (r === 'pd') return 'design'; // PD (new)
+            if (r.includes('data') && r.includes('science')) return 'data'; // Data Science (legacy)
+            if (r === 'ds') return 'data'; // DS (new)
             if (r.includes('data')) return 'data';
             return 'other';
         };
@@ -1204,11 +1208,26 @@
             };
         };
 
+        const getManagerRatio = (list) => {
+            const managers = list.filter(p => p.level && p.level.toUpperCase().startsWith('M')).length;
+            const ics = list.filter(p => !p.level || !p.level.toUpperCase().startsWith('M')).length;
+            return {
+                managers,
+                ics,
+                ratio: managers > 0 ? (ics / managers).toFixed(1) : (ics > 0 ? '∞' : '0'),
+                total: managers + ics
+            };
+        };
+
         const getRoleAbbr = (role) => {
             const r = role.toLowerCase();
             if (r.includes('eng') && !r.includes('data')) return 'Eng';
-            if (r.includes('prod') && r.includes('manage')) return 'PM';
-            if (r.includes('prod') && r.includes('design')) return 'PD';
+            if (r.includes('prod') && r.includes('manage')) return 'PM'; // Product Management (legacy)
+            if (r === 'pm') return 'PM'; // PM (new)
+            if (r.includes('prod') && r.includes('design')) return 'PD'; // Product Design (legacy)
+            if (r === 'pd') return 'PD'; // PD (new)
+            if (r.includes('data') && r.includes('science')) return 'DS'; // Data Science (legacy)
+            if (r === 'ds') return 'DS'; // DS (new)
             if (r.includes('data')) return 'DA';
             return 'Other';
         };
@@ -1330,6 +1349,7 @@
             const hiredTotal = filteredPersonnel.filter(p => p.status === 'Hired').length;
             const vacancyTotal = filteredPersonnel.filter(p => p.status !== 'Hired').length;
             const ratios = getLeverageRatios(filteredPersonnel.filter(p => p.status === 'Hired'));
+            const counts = getRoleCounts(filteredPersonnel.filter(p => p.status === 'Hired'));
 
             // ✅ FIXED: Effective goal should reflect planned seats in selected scope
             const effectiveGoal =
@@ -1396,47 +1416,101 @@
                     <div class="bg-slate-900 rounded-[48px] p-12 border border-slate-800 shadow-2xl text-white relative group">
                         <div class="absolute top-0 right-0 w-32 h-32 bg-white/5 -mr-16 -mt-16 rounded-full group-hover:scale-110 transition-transform duration-700"></div>
                         <h2 class="text-3xl font-black uppercase tracking-tighter mb-8">${summaryCategory} Ratios</h2>
-                        <div class="grid grid-cols-3 gap-6 mb-8">
-                            <div class="border-l-2 border-indigo-500 pl-6 py-2">
-                                <p class="text-[9px] font-black uppercase opacity-40 mb-2 tracking-widest">Eng : PM</p>
-                                <h3 class="text-3xl font-black">${ratios.engPm}:1</h3>
-                                <p class="text-[8px] opacity-30 mt-1 uppercase tracking-widest">Target ${config.ratios.pm.min}-${config.ratios.pm.max}</p>
-                            </div>
-                            <div class="border-l-2 border-rose-500 pl-6 py-2">
-                                <p class="text-[9px] font-black uppercase opacity-40 mb-2 tracking-widest">Eng : Design</p>
-                                <h3 class="text-3xl font-black">${ratios.engPd}:1</h3>
-                                <p class="text-[8px] opacity-30 mt-1 uppercase tracking-widest">Target ${config.ratios.design.min}-${config.ratios.design.max}</p>
-                            </div>
-                            <div class="border-l-2 border-emerald-500 pl-6 py-2">
-                                <p class="text-[9px] font-black uppercase opacity-40 mb-2 tracking-widest">Eng : Data</p>
-                                <h3 class="text-3xl font-black">${ratios.engDa}:1</h3>
-                                <p class="text-[8px] opacity-30 mt-1 uppercase tracking-widest">Target ${config.ratios.data.min}-${config.ratios.data.max}</p>
-                            </div>
-                        </div>
                         
-                        <!-- Absolute Numbers and Percentages -->
-                        <div class="pt-6 border-t border-white/10 space-y-3">
-                            ${(() => {
-                                const total = counts.eng + counts.pm + counts.pd + counts.da;
-                                const pctEng = total > 0 ? Math.round((counts.eng / total) * 100) : 0;
-                                const pctPm = total > 0 ? Math.round((counts.pm / total) * 100) : 0;
-                                const pctPd = total > 0 ? Math.round((counts.pd / total) * 100) : 0;
-                                const pctDa = total > 0 ? Math.round((counts.da / total) * 100) : 0;
+                        ${(() => {
+                            // Get all roles and their counts
+                            const hiredInScope = filteredPersonnel.filter(p => p.status === 'Hired');
+                            let roleData = config.roles.map(role => {
+                                const count = hiredInScope.filter(p => p.role === role).length;
+                                return { role, count };
+                            }).filter(r => r.count > 0); // Only show roles with people
+                            
+                            // Custom sort order: Eng, PM, PD, DS, then everything else alphabetically
+                            const sortOrder = ['Eng', 'PM', 'PD', 'DS'];
+                            roleData.sort((a, b) => {
+                                const aIndex = sortOrder.indexOf(a.role);
+                                const bIndex = sortOrder.indexOf(b.role);
                                 
-                                return `
+                                // If both are in sortOrder, sort by their position
+                                if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+                                // If only a is in sortOrder, a comes first
+                                if (aIndex !== -1) return -1;
+                                // If only b is in sortOrder, b comes first
+                                if (bIndex !== -1) return 1;
+                                // Neither in sortOrder, sort alphabetically
+                                return a.role.localeCompare(b.role);
+                            });
+                            
+                            const total = roleData.reduce((sum, r) => sum + r.count, 0);
+                            
+                            // Find Eng count for ratios
+                            const engCount = roleData.find(r => r.role.toLowerCase().includes('eng') && !r.role.toLowerCase().includes('data'))?.count || 1;
+                            
+                            // Get Manager:IC ratio
+                            const mgrRatio = getManagerRatio(hiredInScope);
+                            
+                            // Color palette for roles
+                            const colors = ['indigo', 'rose', 'emerald', 'amber', 'purple', 'cyan', 'orange', 'pink'];
+                            
+                            // Generate ratio cards for non-Eng roles
+                            const ratioCards = roleData
+                                .filter(r => !r.role.toLowerCase().includes('eng') || r.role.toLowerCase().includes('data'))
+                                .map((r, idx) => {
+                                    const ratio = (engCount / (r.count || 1)).toFixed(1);
+                                    const color = colors[idx % colors.length];
+                                    const configKey = getFunctionKey(r.role);
+                                    const targetRange = config.ratios[configKey] 
+                                        ? 'Target ' + config.ratios[configKey].min + '-' + config.ratios[configKey].max
+                                        : '';
+                                    
+                                    return `
+                                        <div class="border-l-2 border-${color}-500 pl-6 py-2">
+                                            <p class="text-[9px] font-black uppercase opacity-40 mb-2 tracking-widest">Eng : ${r.role}</p>
+                                            <h3 class="text-3xl font-black">${ratio}:1</h3>
+                                            ${targetRange ? '<p class="text-[8px] opacity-30 mt-1 uppercase tracking-widest">' + targetRange + '</p>' : ''}
+                                        </div>
+                                    `;
+                                }).join('');
+                            
+                            // Add Manager:IC ratio card
+                            const mgrCard = `
+                                <div class="border-l-2 border-violet-500 pl-6 py-2">
+                                    <p class="text-[9px] font-black uppercase opacity-40 mb-2 tracking-widest">IC : Manager</p>
+                                    <h3 class="text-3xl font-black">${mgrRatio.ratio}:1</h3>
+                                    <p class="text-[8px] opacity-30 mt-1 uppercase tracking-widest">${mgrRatio.ics} ICs, ${mgrRatio.managers} Mgrs</p>
+                                </div>
+                            `;
+                            
+                            // Generate absolute numbers line (in sorted order)
+                            const absoluteLine = roleData.map(r => r.count + ' ' + r.role).join(' : ');
+                            
+                            // Generate percentages line
+                            const percentagesLine = roleData.map(r => {
+                                const pct = total > 0 ? Math.round((r.count / total) * 100) : 0;
+                                return pct + '%';
+                            }).join(' : ');
+                            
+                            return `
+                                <div class="grid grid-cols-3 gap-6 mb-8">
+                                    ${ratioCards}
+                                    ${mgrCard}
+                                </div>
+                                
+                                <!-- Absolute Numbers and Percentages -->
+                                <div class="pt-6 border-t border-white/10 space-y-3">
                                     <div class="text-center">
                                         <p class="text-lg font-bold opacity-90">
-                                            ${counts.eng} Eng : ${counts.pm} PM : ${counts.pd} Design : ${counts.da} Data
+                                            ${absoluteLine}
                                         </p>
                                     </div>
                                     <div class="text-center">
                                         <p class="text-sm font-medium opacity-60">
-                                            (${pctEng}% : ${pctPm}% : ${pctPd}% : ${pctDa}%)
+                                            (${percentagesLine})
                                         </p>
                                     </div>
-                                `;
-                            })()}
-                        </div>
+                                </div>
+                            `;
+                        })()}
                     </div>
                 </div>
 
@@ -2001,6 +2075,18 @@
                                 </div>
                                 <div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.design.min}-${config.ratios.design.max}</div>
                             </div>
+                            ${(() => {
+                                const mgrRatio = getManagerRatio(tribeMbs);
+                                return `
+                                    <div class="flex justify-between items-start pt-4 border-t border-slate-50">
+                                        <div>
+                                            <p class="text-[9px] text-slate-400 uppercase font-black mb-1">IC : Manager</p>
+                                            <h3 class="text-3xl font-black">${mgrRatio.ratio}:1</h3>
+                                            <p class="text-[10px] text-slate-500 font-medium mt-2">${mgrRatio.ics} ICs : ${mgrRatio.managers} Mgrs</p>
+                                        </div>
+                                    </div>
+                                `;
+                            })()}
                         </div>
                     </div>
                     <div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
@@ -2206,6 +2292,15 @@
                                 <div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">Eng : Design</p><h3 class="text-3xl font-black">${ratios.engPd}:1</h3></div>
                                 <div class="text-right text-[8px] font-black text-slate-300 uppercase">Target ${config.ratios.design.min}-${config.ratios.design.max}</div>
                             </div>
+                            ${(() => {
+                                const mgrRatio = getManagerRatio(squadMbs);
+                                return `
+                                    <div class="flex justify-between items-end pt-4 border-t border-slate-50">
+                                        <div><p class="text-[9px] text-slate-400 uppercase font-black mb-1">IC : Manager</p><h3 class="text-3xl font-black">${mgrRatio.ratio}:1</h3></div>
+                                        <div class="text-right text-[8px] font-black text-slate-300 uppercase">${mgrRatio.ics} ICs, ${mgrRatio.managers} Mgrs</div>
+                                    </div>
+                                `;
+                            })()}
                         </div>
                     </div>
                     <div class="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
