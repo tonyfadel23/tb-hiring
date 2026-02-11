@@ -2895,19 +2895,82 @@
             const activePersonnel = filterActivePersonnel(personnel);
             const hired = activePersonnel.filter(p => p.status === 'Hired');
             
-            // Get counts by tribe
+            // Get seniority breakdown
+            const seniorityBreakdown = {};
+            config.levels.forEach(level => {
+                seniorityBreakdown[level] = hired.filter(p => p.level === level).length;
+            });
+            
+            // Get leadership breakdown
+            const leadershipBreakdown = {};
+            config.leadershipTitles.forEach(title => {
+                const count = hired.filter(p => p.leadershipTitle === title).length;
+                if (count > 0) {
+                    leadershipBreakdown[title] = {
+                        count: count,
+                        people: hired.filter(p => p.leadershipTitle === title).map(p => ({
+                            name: p.name,
+                            role: p.role,
+                            tribe: p.tribe,
+                            level: p.level
+                        }))
+                    };
+                }
+            });
+            
+            // Get detailed tribe data
             const tribeData = tribes.filter(t => !config.excludedTribes.includes(t.name)).map(t => {
                 const tribePersonnel = hired.filter(p => p.tribe === t.name);
                 const roleCounts = getRoleCounts(tribePersonnel);
+                const tribeMgrRatio = getManagerRatio(tribePersonnel);
+                
+                // Get seniority breakdown per tribe
+                const tribeSeniority = {};
+                config.levels.forEach(level => {
+                    const count = tribePersonnel.filter(p => p.level === level).length;
+                    if (count > 0) tribeSeniority[level] = count;
+                });
+                
+                // Get leaders in this tribe
+                const tribeLeaders = {
+                    pmLead: getTribeLead(t.name, 'prod'),
+                    designLead: getTribeLead(t.name, 'design'),
+                    engLead: getTribeLead(t.name, 'eng'),
+                    dataLead: getTribeLead(t.name, 'data'),
+                    pops: getOverallTribeLead(t.name)
+                };
+                
                 return {
                     name: t.name,
-                    category: t.category,
+                    category: t.category || 'Uncategorized',
                     total: tribePersonnel.length,
-                    roles: roleCounts,
-                    squads: (t.squads || []).map(sq => ({
-                        name: sq,
-                        total: hired.filter(p => p.tribe === t.name && p.squad === sq).length
-                    }))
+                    roles: {
+                        eng: roleCounts.eng,
+                        pm: roleCounts.pm,
+                        design: roleCounts.pd,
+                        data: roleCounts.da
+                    },
+                    seniority: tribeSeniority,
+                    leaders: tribeLeaders,
+                    managerRatio: {
+                        ics: tribeMgrRatio.ics,
+                        managers: tribeMgrRatio.managers,
+                        ratio: tribeMgrRatio.ratio
+                    },
+                    squads: (t.squads || []).map(sq => {
+                        const squadPersonnel = hired.filter(p => p.tribe === t.name && p.squad === sq);
+                        const squadRoles = getRoleCounts(squadPersonnel);
+                        return {
+                            name: sq,
+                            total: squadPersonnel.length,
+                            roles: {
+                                eng: squadRoles.eng,
+                                pm: squadRoles.pm,
+                                design: squadRoles.pd,
+                                data: squadRoles.da
+                            }
+                        };
+                    })
                 };
             });
             
@@ -2916,23 +2979,59 @@
             const mgrRatio = getManagerRatio(hired);
             const openCount = activePersonnel.filter(p => p.status === 'Open').length;
             const hiringCount = activePersonnel.filter(p => p.status === 'Hiring').length;
+            const resignedCount = personnel.filter(p => p.status === 'Resigned').length;
+            
+            // Get ratios
+            const ratios = getLeverageRatios(hired);
+            
+            // Get categories summary
+            const categorySummary = {};
+            config.categories.forEach(cat => {
+                const catTribes = tribes.filter(t => t.category === cat && !config.excludedTribes.includes(t.name));
+                const catPersonnel = hired.filter(p => catTribes.some(t => t.name === p.tribe));
+                if (catPersonnel.length > 0) {
+                    categorySummary[cat] = {
+                        tribes: catTribes.length,
+                        headcount: catPersonnel.length,
+                        roles: getRoleCounts(catPersonnel)
+                    };
+                }
+            });
             
             return {
-                totalEmployees: hired.length,
-                openPositions: openCount,
-                hiringInProgress: hiringCount,
+                summary: {
+                    totalEmployees: hired.length,
+                    openPositions: openCount,
+                    hiringInProgress: hiringCount,
+                    recentResignations: resignedCount,
+                    totalTribes: tribes.filter(t => !config.excludedTribes.includes(t.name)).length,
+                    totalSquads: tribes.reduce((sum, t) => sum + (t.squads || []).length, 0)
+                },
                 roleCounts: {
                     eng: totalCounts.eng,
                     pm: totalCounts.pm,
-                    pd: totalCounts.pd,
+                    design: totalCounts.pd,
                     data: totalCounts.da
+                },
+                ratios: {
+                    engToPM: ratios.pm ? `1:${ratios.pm}` : 'N/A',
+                    engToDesign: ratios.design ? `1:${ratios.design}` : 'N/A',
+                    engToData: ratios.data ? `1:${ratios.data}` : 'N/A',
+                    targetEngToPM: `1:${config.ratios.pm.min}-${config.ratios.pm.max}`,
+                    targetEngToDesign: `1:${config.ratios.design.min}-${config.ratios.design.max}`,
+                    targetEngToData: `1:${config.ratios.data.min}-${config.ratios.data.max}`
                 },
                 managerRatio: {
                     ics: mgrRatio.ics,
                     managers: mgrRatio.managers,
-                    ratio: mgrRatio.ratio
+                    ratio: mgrRatio.ratio,
+                    formatted: `${mgrRatio.ics} ICs : ${mgrRatio.managers} Managers (${mgrRatio.ratio})`
                 },
-                tribes: tribeData
+                seniority: seniorityBreakdown,
+                leadership: leadershipBreakdown,
+                categories: categorySummary,
+                tribes: tribeData,
+                excludedTribes: config.excludedTribes || []
             };
         };
 
