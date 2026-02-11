@@ -42,8 +42,8 @@
         let config = {
             strategicGoal: 0,
 
-            // ✅ NEW: Tribe Categories (synced from Firestore)
-            categories: ["Unassigned", "Feature", "Platform", "Data"],
+            // ✅ Tribe Categories (fully dynamic - add your own in Config tab)
+            categories: [],
             
             // ✅ NEW: Excluded Tribes (treated like Resigned - hidden from all counts/ratios)
             excludedTribes: [],
@@ -3010,7 +3010,19 @@ Answer questions about this organization data accurately and concisely. Use the 
                                 <div class="space-y-8">
                                     <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-indigo-500 uppercase">Leadership Titles</p><button onclick="window.addConfigItem('leadershipTitles')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${config.leadershipTitles.map(r => `<span class="bg-[#ff5a00] text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${r}<i onclick="window.removeConfigItem('leadershipTitles', '${r}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
                                     
-                                    <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-slate-900 uppercase">Tribe Categories</p><button onclick="window.addConfigItem('categories')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${(config.categories || []).map(c => `<span class="bg-[#ff5a00] text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${c}<i onclick="window.removeConfigItem('categories', '${c}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
+                                    <div>
+                                        <div class="flex justify-between items-center mb-3">
+                                            <div>
+                                                <p class="text-[10px] font-black text-slate-900 uppercase">Tribe Categories</p>
+                                                <p class="text-[8px] text-slate-400 mt-1">Organize tribes into categories (e.g., Feature, Platform, Data)</p>
+                                            </div>
+                                            <button onclick="window.addConfigItem('categories')" class="text-indigo-600 text-[10px] font-black">ADD</button>
+                                        </div>
+                                        <div class="flex flex-wrap gap-2">
+                                            ${(config.categories || []).map(c => `<span class="bg-[#ff5a00] text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${c}<i onclick="window.removeConfigItem('categories', '${c}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}
+                                            ${(config.categories || []).length === 0 ? '<p class="text-[9px] text-slate-300 italic">No categories defined - add your first category above</p>' : ''}
+                                        </div>
+                                    </div>
 
                                     <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-slate-900 uppercase">Job Families</p><button onclick="window.addConfigItem('roles')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${config.roles.map(r => `<span class="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${r}<i onclick="window.removeConfigItem('roles', '${r}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
                                     <div><div class="flex justify-between items-center mb-3"><p class="text-[10px] font-black text-slate-500 uppercase">Seniority Levels</p><button onclick="window.addConfigItem('levels')" class="text-indigo-600 text-[10px] font-black">ADD</button></div><div class="flex flex-wrap gap-2">${config.levels.map(l => `<span class="bg-slate-100 text-slate-500 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2">${l}<i onclick="window.removeConfigItem('levels', '${l}')" class="fa-solid fa-times cursor-pointer opacity-40 hover:opacity-100"></i></span>`).join('')}</div></div>
@@ -3058,7 +3070,8 @@ Answer questions about this organization data accurately and concisely. Use the 
                                             <div>
                                                 <input type="text" value="${t.name}" onchange="window.updateTribeName('${t.id}', '${t.name}', this.value)" class="bg-transparent border-none p-0 focus:ring-0 text-lg font-black uppercase text-slate-900 w-full max-w-[200px] mb-2">
                                                 <select onchange="window.updateTribeField('${t.id}', 'category', this.value)" class="bg-white border-slate-200 rounded-lg text-[8px] font-black uppercase text-indigo-500 px-2 py-1 cursor-pointer">
-                                                    ${(config.categories || ["Unassigned"]).map(cat => `<option value="${cat}" ${t.category === cat ? 'selected' : ''}>${cat}</option>`).join('')}
+                                                    ${config.categories.length === 0 ? '<option value="">No categories - add in Config</option>' : ''}
+                                                    ${config.categories.map(cat => `<option value="${cat}" ${t.category === cat ? 'selected' : ''}>${cat}</option>`).join('')}
                                                 </select>
                                             </div>
                                         </div>
