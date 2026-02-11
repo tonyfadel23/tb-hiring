@@ -1426,14 +1426,16 @@
         };
 
         const getOverallTribeLead = (tribeName) => {
-            // Get the overall tribe lead (typically "Tribe Lead" title)
+            // Get people with Product Ops role AND Tribe Lead title (PoPs = Product Ops People)
             const leads = personnel.filter(p => {
                 const tribeMatch = p.tribe === tribeName || (p.secondaryTribes && p.secondaryTribes.includes(tribeName));
+                const isProductOps = (p.role || '').toLowerCase().includes('product') && 
+                                     (p.role || '').toLowerCase().includes('ops');
                 const isTribeLead = p.leadershipTitle && 
                     (p.leadershipTitle.toLowerCase().includes('tribe lead') || 
                      p.leadershipTitle.toLowerCase().includes('group lead'));
                 const isActive = p.status === 'Hired';
-                return tribeMatch && isTribeLead && isActive;
+                return tribeMatch && isProductOps && isTribeLead && isActive;
             });
             if (leads.length === 0) return "-";
             return leads.map(l => l.name).join(', ');
@@ -3485,7 +3487,7 @@ Answer questions about this organization data accurately and concisely. Use the 
                     </label>
                     <select id="edit-person-leadership" class="w-full bg-indigo-50 border-none rounded-2xl px-6 py-4 font-bold text-indigo-600">
                         <option value="">No Leadership Role</option>
-                        <option value="Tribe Lead">Tribe Lead</option>
+                        ${config.leadershipTitles.map(t => `<option value="${t}">${t}</option>`).join('')}
                     </select>
                 </div>
                 
