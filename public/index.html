@@ -1425,6 +1425,20 @@
             return leads.map(l => l.name).join(', ');
         };
 
+        const getOverallTribeLead = (tribeName) => {
+            // Get the overall tribe lead (typically "Tribe Lead" title)
+            const leads = personnel.filter(p => {
+                const tribeMatch = p.tribe === tribeName || (p.secondaryTribes && p.secondaryTribes.includes(tribeName));
+                const isTribeLead = p.leadershipTitle && 
+                    (p.leadershipTitle.toLowerCase().includes('tribe lead') || 
+                     p.leadershipTitle.toLowerCase().includes('group lead'));
+                const isActive = p.status === 'Hired';
+                return tribeMatch && isTribeLead && isActive;
+            });
+            if (leads.length === 0) return "-";
+            return leads.map(l => l.name).join(', ');
+        };
+
         const getTribeFunctionCount = (tribeName, functionKey) => {
             return personnel.filter(p => p.tribe === tribeName && getFunctionKey(p.role) === functionKey && p.status === 'Hired').length;
         };
@@ -1662,7 +1676,7 @@
                                 <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-rose-500 tracking-widest">Design Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'design')}</td>`).join('')}</tr>
                                 <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-indigo-500 tracking-widest">Eng Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'eng')}</td>`).join('')}</tr>
                                 <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-emerald-500 tracking-widest">Data Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'data')}</td>`).join('')}</tr>
-                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-purple-500 tracking-widest">Pops</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-purple-600">${personnel.filter(p => p.tribe === t.name && p.status === 'Hired').length}</td>`).join('')}</tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-purple-500 tracking-widest">Pops</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getOverallTribeLead(t.name)}</td>`).join('')}</tr>
                                 
                                 <tr class="bg-slate-950 text-white"><td class="py-6 pl-6 font-black text-[11px] uppercase tracking-[0.2em]">Total Tribe (FTE)</td>${targetTribes.map(t => `<td class="py-6 px-8 text-center text-2xl font-black">${personnel.filter(p => p.tribe === t.name && p.status === 'Hired').length}</td>`).join('')}</tr>
                                 
