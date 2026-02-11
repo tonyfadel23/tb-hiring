@@ -644,6 +644,10 @@
         let tribeSearchTimeout;
 
         window.updateRosterFilter = (key, val) => {
+            // Store cursor position for search input
+            const searchInput = document.getElementById('roster-search-input');
+            const cursorPosition = searchInput ? searchInput.selectionStart : 0;
+            
             rosterFilters[key] = val;
             
             // Debounce search input, but not dropdowns
@@ -651,10 +655,28 @@
                 clearTimeout(rosterSearchTimeout);
                 rosterSearchTimeout = setTimeout(() => {
                     renderRoster();
+                    // Restore focus and cursor position after render
+                    setTimeout(() => {
+                        const input = document.getElementById('roster-search-input');
+                        if (input && document.activeElement !== input) {
+                            input.focus();
+                            input.setSelectionRange(cursorPosition, cursorPosition);
+                        }
+                    }, 0);
                 }, 300); // 300ms delay
             } else {
                 renderRoster();
             }
+        };
+
+        window.clearRosterSearch = () => {
+            rosterFilters.search = '';
+            renderRoster();
+            // Focus the input after clearing
+            setTimeout(() => {
+                const input = document.getElementById('roster-search-input');
+                if (input) input.focus();
+            }, 0);
         };
 
         window.toggleRosterSort = () => {
@@ -781,9 +803,11 @@
 
         const getFilteredRosterPersonnel = () => {
             let filtered = personnel.filter(p => {
-                const searchTerm = rosterFilters.search.toLowerCase();
-                const matchSearch = 
-                    p.name.toLowerCase().includes(searchTerm) ||
+                const searchTerm = (rosterFilters.search || '').toLowerCase().trim();
+                
+                // If no search term, don't filter by search
+                const matchSearch = !searchTerm || 
+                    (p.name || '').toLowerCase().includes(searchTerm) ||
                     (p.tribe || '').toLowerCase().includes(searchTerm) ||
                     (p.squad || '').toLowerCase().includes(searchTerm) ||
                     (p.role || '').toLowerCase().includes(searchTerm) ||
@@ -1000,6 +1024,9 @@
                 
                 const workbook = XLSX.utils.book_new();
                 
+                // Filter out excluded tribes
+                const activeTribes = tribes.filter(t => !config.excludedTribes.includes(t.name));
+                
                 // Create summary sheet FIRST
                 const summaryData = [
                     ['Tribe Summary Report'],
@@ -1008,7 +1035,7 @@
                     ['Tribe', 'Total Headcount', 'Hired', 'Open', 'Hiring', 'Fill Rate']
                 ];
                 
-                tribes.forEach(tribe => {
+                activeTribes.forEach(tribe => {
                     const tribePersonnel = personnel.filter(p => p.tribe === tribe.name && p.status !== 'Resigned');
                     const hired = tribePersonnel.filter(p => p.status === 'Hired').length;
                     const open = tribePersonnel.filter(p => p.status === 'Open').length;
@@ -1039,7 +1066,7 @@
                 XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
                 
                 // Then create a sheet for each tribe
-                tribes.forEach(tribe => {
+                activeTribes.forEach(tribe => {
                     const tribePersonnel = personnel.filter(p => p.tribe === tribe.name && p.status !== 'Resigned');
                     
                     if (tribePersonnel.length === 0) return; // Skip empty tribes
@@ -1635,6 +1662,7 @@
                                 <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-rose-500 tracking-widest">Design Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'design')}</td>`).join('')}</tr>
                                 <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-indigo-500 tracking-widest">Eng Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'eng')}</td>`).join('')}</tr>
                                 <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-emerald-500 tracking-widest">Data Lead</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-xs font-bold text-slate-600">${getTribeLead(t.name, 'data')}</td>`).join('')}</tr>
+                                <tr><td class="py-4 pl-4 font-black text-[10px] uppercase text-purple-500 tracking-widest">Pops</td>${targetTribes.map(t => `<td class="py-4 px-8 text-center text-lg font-black text-purple-600">${personnel.filter(p => p.tribe === t.name && p.status === 'Hired').length}</td>`).join('')}</tr>
                                 
                                 <tr class="bg-slate-950 text-white"><td class="py-6 pl-6 font-black text-[11px] uppercase tracking-[0.2em]">Total Tribe (FTE)</td>${targetTribes.map(t => `<td class="py-6 px-8 text-center text-2xl font-black">${personnel.filter(p => p.tribe === t.name && p.status === 'Hired').length}</td>`).join('')}</tr>
                                 
@@ -2585,15 +2613,31 @@
                     <div class="mb-8 space-y-4">
                         <div class="flex flex-wrap items-center gap-4">
                             <div class="relative flex-1 min-w-[300px]">
-                                <i class="fa-solid fa-magnifying-glass absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 text-sm"></i>
-                                <input type="text" placeholder="Search name, role, tribe, squad..." value="${rosterFilters.search}" oninput="window.updateRosterFilter('search', this.value)" class="w-full bg-slate-50 border-none rounded-2xl pl-14 pr-6 py-4 font-bold text-sm focus:ring-2 focus:ring-indigo-100 transition-all">
+                                <i class="fa-solid fa-magnifying-glass absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 text-sm pointer-events-none"></i>
+                                <input 
+                                    type="text" 
+                                    id="roster-search-input"
+                                    placeholder="Search name, role, tribe, squad..." 
+                                    value="${rosterFilters.search || ''}" 
+                                    oninput="window.updateRosterFilter('search', this.value)" 
+                                    class="w-full bg-slate-50 border-none rounded-2xl pl-14 pr-${rosterFilters.search ? '14' : '6'} py-4 font-bold text-sm focus:ring-2 focus:ring-indigo-100 transition-all"
+                                >
+                                ${rosterFilters.search ? `
+                                    <button 
+                                        onclick="window.clearRosterSearch()" 
+                                        class="absolute right-4 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-slate-300 hover:bg-slate-400 text-white flex items-center justify-center transition-colors"
+                                        title="Clear search"
+                                    >
+                                        <i class="fa-solid fa-times text-xs"></i>
+                                    </button>
+                                ` : ''}
                             </div>
                             <select onchange="window.updateRosterFilter('role', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer">
-                                <option value="all">All Roles</option>
+                                <option value="all" ${rosterFilters.role === 'all' ? 'selected' : ''}>All Roles</option>
                                 ${config.roles.map(r => `<option value="${r}" ${rosterFilters.role === r ? 'selected' : ''}>${r}</option>`).join('')}
                             </select>
                             <select onchange="window.updateRosterFilter('status', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer">
-                                <option value="all">All Status</option>
+                                <option value="all" ${rosterFilters.status === 'all' ? 'selected' : ''}>All Status</option>
                                 <option value="Hired" ${rosterFilters.status === 'Hired' ? 'selected' : ''}>Hired</option>
                                 <option value="Hiring" ${rosterFilters.status === 'Hiring' ? 'selected' : ''}>Hiring</option>
                                 <option value="Open" ${rosterFilters.status === 'Open' ? 'selected' : ''}>Open</option>
@@ -2602,11 +2646,11 @@
                         </div>
                         <div class="flex flex-wrap items-center gap-4">
                             <select onchange="window.updateRosterFilter('tribe', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer">
-                                <option value="all">All Tribes</option>
+                                <option value="all" ${rosterFilters.tribe === 'all' ? 'selected' : ''}>All Tribes</option>
                                 ${tribes.map(t => `<option value="${t.name}" ${rosterFilters.tribe === t.name ? 'selected' : ''}>${t.name}</option>`).join('')}
                             </select>
                             <select onchange="window.updateRosterFilter('squad', this.value)" class="bg-slate-50 border-none rounded-2xl px-6 py-4 text-[10px] font-black uppercase tracking-widest cursor-pointer">
-                                <option value="all">All Squads</option>
+                                <option value="all" ${rosterFilters.squad === 'all' ? 'selected' : ''}>All Squads</option>
                                 ${[...new Set(tribes.flatMap(t => t.squads || []))].map(s => `<option value="${s}" ${rosterFilters.squad === s ? 'selected' : ''}>${s}</option>`).join('')}
                             </select>
                             <div class="flex items-center gap-2 bg-slate-50 rounded-2xl px-6 py-4">
@@ -2744,6 +2788,7 @@
             if (!container) return;
             
             container.innerHTML = `
+                <div class="max-w-5xl mx-auto">
                     <div class="bg-white rounded-[48px] p-12 border border-slate-100 shadow-sm mb-8">
                         <div class="flex items-center gap-4 mb-6">
                             <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
@@ -2773,6 +2818,7 @@
                             </div>
                         </div>
                     </div>
+                    
                     <!-- Chat Messages -->
                     <div id="chat-messages" class="space-y-6 mb-6 max-h-[600px] overflow-y-auto">
                         ${chatMessages.map((msg, idx) => `
@@ -2786,7 +2832,7 @@
                         ${isChatLoading ? `
                             <div class="flex justify-start">
                                 <div class="bg-white border border-slate-200 rounded-2xl px-6 py-4 max-w-3xl shadow-sm">
-                                    <div class="flex items-center gap-2 mb-2"><i class="fa-solid fa-robot text-indigo-600"></i><span class="text-[10px] font-black text-slate-400 uppercase">AI</span></div>
+                                    <div class="flex items-center gap-2 mb-2"><i class="fa-solid fa-robot text-indigo-600"></i><span class="text-[10px] font-black text-slate-400 uppercase">AI Assistant</span></div>
                                     <div class="flex gap-2">
                                         <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style="animation-delay: 0ms"></div>
                                         <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style="animation-delay: 150ms"></div>
@@ -2896,10 +2942,11 @@
                 // 2. Change this URL to YOUR backend endpoint (e.g., 'https://your-domain.com/api/chat')
                 // 3. Add your Anthropic API key to backend environment variables
                 // 4. Backend should proxy this request to api.anthropic.com with your API key
-                const response = await fetch('/api/chat', {
+                const response = await fetch('https://api.anthropic.com/v1/messages', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'anthropic-version': '2023-06-01'
                         // NOTE: API key should NEVER be in frontend code
                         // It should be in your backend server's environment variables
                     },
