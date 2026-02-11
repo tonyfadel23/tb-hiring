@@ -1,0 +1,10 @@
+{
+  "name": "headcount-dashboard",
+  "version": "1.0.0",
+  "description": "Headcount dashboard with AI assistant",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'No build needed'"
+  },
+  "dependencies": {}
+}
