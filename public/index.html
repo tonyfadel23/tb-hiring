@@ -1385,22 +1385,54 @@
         };
 
         const getLeverageRatios = (list) => {
+            // Exclude IC4+ and M-level engineers from Eng count for ratios
+            const seniorLevels = ['IC4', 'IC5', 'IC6', 'M1', 'M2', 'M3', 'M4'];
+            const juniorEngs = list.filter(p => 
+                getFunctionKey(p.role) === 'eng' && 
+                !seniorLevels.includes(p.level?.toUpperCase())
+            ).length;
+            
             const r = getRoleCounts(list);
+            
             return {
-                engPm: r.pm > 0 ? (r.eng / r.pm).toFixed(1) : (r.eng > 0 ? '∞' : '0'),
-                engPd: r.pd > 0 ? (r.eng / r.pd).toFixed(1) : (r.eng > 0 ? '∞' : '0'),
-                engDa: r.da > 0 ? (r.eng / r.da).toFixed(1) : (r.eng > 0 ? '∞' : '0')
+                pm: r.pm > 0 ? (juniorEngs / r.pm).toFixed(1) : (juniorEngs > 0 ? '∞' : '0'),
+                design: r.pd > 0 ? (juniorEngs / r.pd).toFixed(1) : (juniorEngs > 0 ? '∞' : '0'),
+                data: r.da > 0 ? (juniorEngs / r.da).toFixed(1) : (juniorEngs > 0 ? '∞' : '0'),
+                juniorEngCount: juniorEngs,
+                totalEngCount: r.eng,
+                
+                // Legacy field names for compatibility
+                engPm: r.pm > 0 ? (juniorEngs / r.pm).toFixed(1) : (juniorEngs > 0 ? '∞' : '0'),
+                engPd: r.pd > 0 ? (juniorEngs / r.pd).toFixed(1) : (juniorEngs > 0 ? '∞' : '0'),
+                engDa: r.da > 0 ? (juniorEngs / r.da).toFixed(1) : (juniorEngs > 0 ? '∞' : '0')
             };
         };
 
         const getManagerRatio = (list) => {
-            const managers = list.filter(p => p.level && p.level.toUpperCase().startsWith('M')).length;
-            const ics = list.filter(p => !p.level || !p.level.toUpperCase().startsWith('M')).length;
+            // M-levels only for managers
+            const managers = list.filter(p => p.level && ['M1', 'M2', 'M3', 'M4'].includes(p.level.toUpperCase())).length;
+            const ics = list.filter(p => !p.level || !['M1', 'M2', 'M3', 'M4'].includes(p.level.toUpperCase())).length;
             return {
                 managers,
                 ics,
                 ratio: managers > 0 ? (ics / managers).toFixed(1) : (ics > 0 ? '∞' : '0'),
                 total: managers + ics
+            };
+        };
+
+        const getSeniorEngRatio = (list) => {
+            // IC4/IC5/IC6 to all Eng ratio
+            const allEngs = list.filter(p => getFunctionKey(p.role) === 'eng').length;
+            const seniorEngs = list.filter(p => 
+                getFunctionKey(p.role) === 'eng' && 
+                ['IC4', 'IC5', 'IC6'].includes(p.level?.toUpperCase())
+            ).length;
+            
+            return {
+                seniorEngs,
+                totalEngs: allEngs,
+                ratio: allEngs > 0 ? ((seniorEngs / allEngs) * 100).toFixed(1) + '%' : '0%',
+                count: seniorEngs
             };
         };
 
@@ -2343,6 +2375,9 @@
                                 const pctPd = total > 0 ? Math.round((counts.pd / total) * 100) : 0;
                                 const pctDa = total > 0 ? Math.round((counts.da / total) * 100) : 0;
                                 
+                                const seniorEngRatio = getSeniorEngRatio(tribeMbs);
+                                const mgrRatio = getManagerRatio(tribeMbs);
+                                
                                 return `
                                     <div class="text-lg font-black text-slate-900">
                                         ${counts.eng} Eng : ${counts.pm} PM : ${counts.pd} Design : ${counts.da} Data
@@ -2355,6 +2390,16 @@
                                         <div class="bg-amber-50 p-3 rounded-2xl"><p class="text-[9px] text-amber-600 uppercase font-black mb-1">Product</p><h3 class="text-xl font-black text-amber-900">${counts.pm}</h3></div>
                                         <div class="bg-rose-50 p-3 rounded-2xl"><p class="text-[9px] text-rose-600 uppercase font-black mb-1">Design</p><h3 class="text-xl font-black text-rose-900">${counts.pd}</h3></div>
                                         <div class="bg-emerald-50 p-3 rounded-2xl"><p class="text-[9px] text-emerald-600 uppercase font-black mb-1">Data</p><h3 class="text-xl font-black text-emerald-900">${counts.da}</h3></div>
+                                    </div>
+                                    <div class="mt-4 pt-4 border-t border-slate-100 space-y-2">
+                                        <div class="flex justify-between">
+                                            <span class="text-[9px] text-purple-600 uppercase font-black">IC4+ Engineers</span>
+                                            <span class="font-black text-purple-900">${seniorEngRatio.seniorEngs} (${seniorEngRatio.ratio})</span>
+                                        </div>
+                                        <div class="flex justify-between">
+                                            <span class="text-[9px] text-slate-600 uppercase font-black">Managers (M1-M4)</span>
+                                            <span class="font-black text-slate-900">${mgrRatio.managers}</span>
+                                        </div>
                                     </div>
                                 `;
                             })()}
@@ -3036,6 +3081,8 @@
                 const tribePersonnel = hired.filter(p => p.tribe === t.name);
                 const roleCounts = getRoleCounts(tribePersonnel);
                 const tribeMgrRatio = getManagerRatio(tribePersonnel);
+                const tribeSeniorEngRatio = getSeniorEngRatio(tribePersonnel);
+                const tribeRatios = getLeverageRatios(tribePersonnel);
                 
                 // Get seniority breakdown per tribe
                 const tribeSeniority = {};
@@ -3063,12 +3110,25 @@
                         design: roleCounts.pd,
                         data: roleCounts.da
                     },
+                    ratios: {
+                        engToPM: tribeRatios.pm,
+                        engToDesign: tribeRatios.design,
+                        engToData: tribeRatios.data,
+                        juniorEngCount: tribeRatios.juniorEngCount,
+                        note: "Eng count excludes IC4+, IC5, IC6, M1-M4"
+                    },
+                    seniorEngineers: {
+                        ic4Plus: tribeSeniorEngRatio.seniorEngs,
+                        totalEngs: tribeSeniorEngRatio.totalEngs,
+                        percentage: tribeSeniorEngRatio.ratio
+                    },
                     seniority: tribeSeniority,
                     leaders: tribeLeaders,
                     managerRatio: {
                         ics: tribeMgrRatio.ics,
                         managers: tribeMgrRatio.managers,
-                        ratio: tribeMgrRatio.ratio
+                        ratio: tribeMgrRatio.ratio,
+                        note: "Managers are M1-M4 only"
                     },
                     squads: (t.squads || []).map(sq => {
                         const squadPersonnel = hired.filter(p => p.tribe === t.name && p.squad === sq);
@@ -3090,6 +3150,7 @@
             // Get overall stats
             const totalCounts = getRoleCounts(hired);
             const mgrRatio = getManagerRatio(hired);
+            const seniorEngRatio = getSeniorEngRatio(hired);
             const openCount = activePersonnel.filter(p => p.status === 'Open').length;
             const hiringCount = activePersonnel.filter(p => p.status === 'Hiring').length;
             const resignedCount = personnel.filter(p => p.status === 'Resigned').length;
@@ -3111,6 +3172,16 @@
                 }
             });
             
+            // Sample personnel with all fields for AI to understand data structure
+            const samplePersonnel = hired.slice(0, 3).map(p => {
+                // Get all fields from this person
+                const personData = {};
+                Object.keys(p).forEach(key => {
+                    personData[key] = p[key];
+                });
+                return personData;
+            });
+            
             return {
                 summary: {
                     totalEmployees: hired.length,
@@ -3130,21 +3201,33 @@
                     engToPM: ratios.pm ? `1:${ratios.pm}` : 'N/A',
                     engToDesign: ratios.design ? `1:${ratios.design}` : 'N/A',
                     engToData: ratios.data ? `1:${ratios.data}` : 'N/A',
+                    juniorEngCount: ratios.juniorEngCount,
+                    totalEngCount: ratios.totalEngCount,
+                    note: "Eng ratios count junior engineers only (excludes IC4, IC5, IC6, M1-M4)",
                     targetEngToPM: `1:${config.ratios.pm.min}-${config.ratios.pm.max}`,
                     targetEngToDesign: `1:${config.ratios.design.min}-${config.ratios.design.max}`,
                     targetEngToData: `1:${config.ratios.data.min}-${config.ratios.data.max}`
+                },
+                seniorEngineers: {
+                    ic4Plus: seniorEngRatio.seniorEngs,
+                    totalEngs: seniorEngRatio.totalEngs,
+                    percentage: seniorEngRatio.ratio,
+                    description: "IC4, IC5, IC6 engineers as percentage of all engineers"
                 },
                 managerRatio: {
                     ics: mgrRatio.ics,
                     managers: mgrRatio.managers,
                     ratio: mgrRatio.ratio,
-                    formatted: `${mgrRatio.ics} ICs : ${mgrRatio.managers} Managers (${mgrRatio.ratio})`
+                    formatted: `${mgrRatio.ics} ICs : ${mgrRatio.managers} Managers (${mgrRatio.ratio})`,
+                    note: "Managers are M1, M2, M3, M4 levels only"
                 },
                 seniority: seniorityBreakdown,
                 leadership: leadershipBreakdown,
                 categories: categorySummary,
                 tribes: tribeData,
-                excludedTribes: config.excludedTribes || []
+                excludedTribes: config.excludedTribes || [],
+                samplePersonnelData: samplePersonnel,
+                availablePersonnelFields: samplePersonnel.length > 0 ? Object.keys(samplePersonnel[0]) : []
             };
         };
 
