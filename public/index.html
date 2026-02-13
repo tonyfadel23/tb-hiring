@@ -760,6 +760,61 @@
             renderRoster();
         };
 
+        window.exportSelectedRoster = () => {
+            if (selectedRosterIds.size === 0) {
+                alert('No people selected. Please select people using the checkboxes.');
+                return;
+            }
+
+            // Get selected personnel
+            const selectedPeople = personnel.filter(p => selectedRosterIds.has(p.id));
+            
+            // Create CSV content
+            const headers = ['Name', 'Role', 'Level', 'Firebase ID', 'Tribe', 'Squad', 'Status'];
+            const rows = selectedPeople.map(p => [
+                p.name || '',
+                p.role || '',
+                p.level || '',
+                p.id || '',
+                p.tribe || '',
+                p.squad || '',
+                p.status || ''
+            ]);
+            
+            // Escape CSV values (handle commas and quotes)
+            const escapeCsv = (value) => {
+                const str = String(value);
+                if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+                    return `"${str.replace(/"/g, '""')}"`;
+                }
+                return str;
+            };
+            
+            // Build CSV
+            const csvContent = [
+                headers.map(escapeCsv).join(','),
+                ...rows.map(row => row.map(escapeCsv).join(','))
+            ].join('\n');
+            
+            // Create blob and download
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            
+            const timestamp = new Date().toISOString().split('T')[0];
+            const filename = `roster_export_${selectedRosterIds.size}_people_${timestamp}.csv`;
+            
+            link.setAttribute('href', url);
+            link.setAttribute('download', filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            // Log the action
+            logChange('Export', `Exported ${selectedRosterIds.size} selected roster entries to CSV`);
+        };
+
         window.applyBulkUpdate = async (field, value) => {
             if (selectedRosterIds.size === 0) {
                 alert('No people selected. Please select people using the checkboxes.');
@@ -2617,6 +2672,13 @@
                                         <option value="Resigned">Resigned</option>
                                     </select>
                                 </div>
+                                
+                                <div class="h-8 w-px bg-indigo-200"></div>
+                                
+                                <button onclick="window.exportSelectedRoster()" class="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase hover:bg-emerald-700 transition-colors flex items-center gap-2">
+                                    <i class="fa-solid fa-file-csv"></i>
+                                    Export CSV
+                                </button>
                                 
                                 <button onclick="window.clearRosterSelection()" class="ml-auto bg-white border-2 border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-xs font-black uppercase hover:bg-slate-50 transition-colors">
                                     Clear Selection
