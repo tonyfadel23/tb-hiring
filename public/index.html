@@ -760,7 +760,7 @@
             renderRoster();
         };
 
-        window.exportSelectedRoster = () => {
+        window.exportSelectedRoster = (exportType = 'standard') => {
             if (selectedRosterIds.size === 0) {
                 alert('No people selected. Please select people using the checkboxes.');
                 return;
@@ -769,17 +769,51 @@
             // Get selected personnel
             const selectedPeople = personnel.filter(p => selectedRosterIds.has(p.id));
             
-            // Create CSV content
-            const headers = ['Name', 'Role', 'Level', 'Firebase ID', 'Tribe', 'Squad', 'Status'];
-            const rows = selectedPeople.map(p => [
-                p.name || '',
-                p.role || '',
-                p.level || '',
-                p.id || '',
-                p.tribe || '',
-                p.squad || '',
-                p.status || ''
-            ]);
+            let headers, rows, filename;
+            
+            if (exportType === 'full') {
+                // FULL EXPORT: All Firebase fields
+                // Get all unique keys across all selected people
+                const allKeys = new Set();
+                selectedPeople.forEach(p => {
+                    Object.keys(p).forEach(key => allKeys.add(key));
+                });
+                
+                // Sort keys with important ones first
+                const priorityKeys = ['id', 'name', 'role', 'level', 'tribe', 'squad', 'status'];
+                const otherKeys = Array.from(allKeys).filter(k => !priorityKeys.includes(k)).sort();
+                headers = [...priorityKeys.filter(k => allKeys.has(k)), ...otherKeys];
+                
+                // Build rows with all fields
+                rows = selectedPeople.map(p => {
+                    return headers.map(header => {
+                        const value = p[header];
+                        // Handle arrays and objects
+                        if (Array.isArray(value)) {
+                            return value.join('; ');
+                        } else if (typeof value === 'object' && value !== null) {
+                            return JSON.stringify(value);
+                        }
+                        return value || '';
+                    });
+                });
+                
+                filename = `roster_full_export_${selectedRosterIds.size}_people_${new Date().toISOString().split('T')[0]}.csv`;
+            } else {
+                // STANDARD EXPORT: Key fields only
+                headers = ['Name', 'Role', 'Level', 'Firebase ID', 'Tribe', 'Squad', 'Status'];
+                rows = selectedPeople.map(p => [
+                    p.name || '',
+                    p.role || '',
+                    p.level || '',
+                    p.id || '',
+                    p.tribe || '',
+                    p.squad || '',
+                    p.status || ''
+                ]);
+                
+                filename = `roster_export_${selectedRosterIds.size}_people_${new Date().toISOString().split('T')[0]}.csv`;
+            }
             
             // Escape CSV values (handle commas and quotes)
             const escapeCsv = (value) => {
@@ -801,9 +835,6 @@
             const link = document.createElement('a');
             const url = URL.createObjectURL(blob);
             
-            const timestamp = new Date().toISOString().split('T')[0];
-            const filename = `roster_export_${selectedRosterIds.size}_people_${timestamp}.csv`;
-            
             link.setAttribute('href', url);
             link.setAttribute('download', filename);
             link.style.visibility = 'hidden';
@@ -812,7 +843,8 @@
             document.body.removeChild(link);
             
             // Log the action
-            logChange('Export', `Exported ${selectedRosterIds.size} selected roster entries to CSV`);
+            const exportTypeText = exportType === 'full' ? 'full' : 'standard';
+            logChange('Export', `Exported ${selectedRosterIds.size} selected roster entries to CSV (${exportTypeText})`);
         };
 
         window.applyBulkUpdate = async (field, value) => {
@@ -2675,10 +2707,29 @@
                                 
                                 <div class="h-8 w-px bg-indigo-200"></div>
                                 
-                                <button onclick="window.exportSelectedRoster()" class="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase hover:bg-emerald-700 transition-colors flex items-center gap-2">
-                                    <i class="fa-solid fa-file-csv"></i>
-                                    Export CSV
-                                </button>
+                                <div class="relative group">
+                                    <button class="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase hover:bg-emerald-700 transition-colors flex items-center gap-2">
+                                        <i class="fa-solid fa-file-csv"></i>
+                                        Export CSV
+                                        <i class="fa-solid fa-chevron-down text-[10px]"></i>
+                                    </button>
+                                    <div class="hidden group-hover:block absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden z-50">
+                                        <button onclick="window.exportSelectedRoster('standard')" class="w-full text-left px-4 py-3 hover:bg-emerald-50 transition-colors flex items-center gap-3 border-b border-slate-100">
+                                            <i class="fa-solid fa-table text-emerald-600"></i>
+                                            <div>
+                                                <div class="text-xs font-black text-slate-900 uppercase">Standard Export</div>
+                                                <div class="text-[10px] text-slate-500">Key fields only</div>
+                                            </div>
+                                        </button>
+                                        <button onclick="window.exportSelectedRoster('full')" class="w-full text-left px-4 py-3 hover:bg-emerald-50 transition-colors flex items-center gap-3">
+                                            <i class="fa-solid fa-database text-emerald-600"></i>
+                                            <div>
+                                                <div class="text-xs font-black text-slate-900 uppercase">Full Export</div>
+                                                <div class="text-[10px] text-slate-500">All Firebase data</div>
+                                            </div>
+                                        </button>
+                                    </div>
+                                </div>
                                 
                                 <button onclick="window.clearRosterSelection()" class="ml-auto bg-white border-2 border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-xs font-black uppercase hover:bg-slate-50 transition-colors">
                                     Clear Selection
@@ -3552,6 +3603,7 @@ Answer questions about this organization data accurately and concisely. Use the 
                     <i class="fa-solid fa-file-excel"></i>
                     Export Excel
                 </button>
+                <button onclick="window.openEntryModal()" class="bg-[#ff5a00] text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-orange-100">New Entry</button>
                 <button id="logout-btn" class="w-12 h-12 rounded-2xl bg-slate-50 text-slate-400 hover:text-red-500 flex items-center justify-center transition-colors"><i class="fa-solid fa-right-from-bracket text-sm"></i></button>
             </div>
         </nav>
