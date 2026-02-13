@@ -9,26 +9,29 @@
     
     <!-- Firebase -->
     <script type="module">
-        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-        import { getFirestore, collection, doc, getDoc, setDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
-        import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getFirestore, collection, doc, getDoc, setDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
 
-        // Firebase configuration
+        // Firebase configuration - matches main dashboard
         const firebaseConfig = {
-            apiKey: "AIzaSyBUxEUT0ѝiMROyBaXhh15ASyR3vxlT_IaY",
-            authDomain: "claude-artifacts.firebaseapp.com",
-            projectId: "claude-artifacts",
-            storageBucket: "claude-artifacts.firebasestorage.app",
-            messagingSenderId: "810499472791",
-            appId: "1:810499472791:web:21a8e10111aa413d2bb26f"
+            apiKey: "AIzaSyDubfBijm6JyrwwRloqthvXCEHQV57Me2Y",
+            authDomain: "tb-hiring-web.firebaseapp.com",
+            databaseURL: "https://tb-hiring-web-default-rtdb.firebaseio.com",
+            projectId: "tb-hiring-web",
+            storageBucket: "tb-hiring-web.firebasestorage.app",
+            messagingSenderId: "724670393100",
+            appId: "1:724670393100:web:72e82f8404d052a6823729",
+            measurementId: "G-CRDQYYGR45"
         };
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
+        const provider = new GoogleAuthProvider();
         
-        // Your artifact ID
-        const appId = 'tb-hiring';
+        // Your artifact ID - matches main dashboard
+        const appId = 'tb-hiring-web';
         
         let user = null;
         let csvData = [];
@@ -49,7 +52,6 @@
         });
 
         window.signIn = async () => {
-            const provider = new GoogleAuthProvider();
             try {
                 await signInWithPopup(auth, provider);
             } catch (error) {
