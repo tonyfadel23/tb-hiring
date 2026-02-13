@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk CSV Import - Headcount Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Firebase -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getFirestore, collection, doc, getDoc, setDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBUxEUT0ѝiMROyBaXhh15ASyR3vxlT_IaY",
+            authDomain: "claude-artifacts.firebaseapp.com",
+            projectId: "claude-artifacts",
+            storageBucket: "claude-artifacts.firebasestorage.app",
+            messagingSenderId: "810499472791",
+            appId: "1:810499472791:web:21a8e10111aa413d2bb26f"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        
+        // Your artifact ID
+        const appId = 'tb-hiring';
+        
+        let user = null;
+        let csvData = [];
+        let previewData = [];
+        let columnMapping = {};
+        let results = {
+            success: 0,
+            failed: 0,
+            created: 0,
+            updated: 0,
+            errors: []
+        };
+
+        // Auth state
+        onAuthStateChanged(auth, (currentUser) => {
+            user = currentUser;
+            updateUI();
+        });
+
+        window.signIn = async () => {
+            const provider = new GoogleAuthProvider();
+            try {
+                await signInWithPopup(auth, provider);
+            } catch (error) {
+                console.error('Sign in error:', error);
+                alert('Failed to sign in: ' + error.message);
+            }
+        };
+
+        window.signOutUser = async () => {
+            try {
+                await signOut(auth);
+            } catch (error) {
+                console.error('Sign out error:', error);
+            }
+        };
+
+        const updateUI = () => {
+            const authSection = document.getElementById('auth-section');
+            const appSection = document.getElementById('app-section');
+            const userInfo = document.getElementById('user-info');
+
+            if (user) {
+                authSection.classList.add('hidden');
+                appSection.classList.remove('hidden');
+                userInfo.textContent = user.email;
+            } else {
+                authSection.classList.remove('hidden');
+                appSection.classList.add('hidden');
+            }
+        };
+
+        // Parse CSV file
+        window.handleFileUpload = (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const text = e.target.result;
+                parseCSV(text);
+            };
+            reader.readAsText(file);
+        };
+
+        const parseCSV = (text) => {
+            const lines = text.split(/\r?\n/).filter(line => line.trim());
+            if (lines.length < 2) {
+                alert('CSV must have at least a header row and one data row');
+                return;
+            }
+
+            // Parse header
+            const headers = parseCSVLine(lines[0]);
+            
+            // Validate first column is Firebase ID
+            if (!headers[0] || headers[0].toLowerCase() !== 'firebase id') {
+                alert('First column must be "Firebase ID"');
+                return;
+            }
+
+            // Parse data rows
+            csvData = [];
+            for (let i = 1; i < lines.length; i++) {
+                const values = parseCSVLine(lines[i]);
+                if (values.length > 0 && values[0].trim()) {
+                    const row = {};
+                    headers.forEach((header, index) => {
+                        row[header] = values[index] || '';
+                    });
+                    csvData.push(row);
+                }
+            }
+
+            // Store column mapping
+            columnMapping = {};
+            headers.forEach((header, index) => {
+                if (index > 0) { // Skip Firebase ID column
+                    columnMapping[header] = header;
+                }
+            });
+
+            displayPreview(headers, csvData);
+        };
+
+        const parseCSVLine = (line) => {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                const nextChar = line[i + 1];
+
+                if (char === '"') {
+                    if (inQuotes && nextChar === '"') {
+                        current += '"';
+                        i++;
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === ',' && !inQuotes) {
+                    result.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            result.push(current.trim());
+            return result;
+        };
+
+        const displayPreview = (headers, data) => {
+            const container = document.getElementById('preview-container');
+            const previewSection = document.getElementById('preview-section');
+            const uploadSection = document.getElementById('upload-section');
+            
+            uploadSection.classList.add('hidden');
+            previewSection.classList.remove('hidden');
+
+            document.getElementById('record-count').textContent = data.length;
+            document.getElementById('column-count').textContent = headers.length - 1; // Exclude Firebase ID
+
+            let html = `
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-slate-100 border-b-2 border-slate-200">
+                                ${headers.map((h, i) => `
+                                    <th class="px-4 py-3 text-xs font-black uppercase ${i === 0 ? 'text-indigo-600' : 'text-slate-600'}">
+                                        ${i === 0 ? '<i class="fa-solid fa-key mr-2"></i>' : ''}${h}
+                                    </th>
+                                `).join('')}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.slice(0, 10).map(row => `
+                                <tr class="border-b border-slate-100 hover:bg-slate-50">
+                                    ${headers.map((h, i) => `
+                                        <td class="px-4 py-3 text-sm ${i === 0 ? 'font-mono text-xs text-indigo-600 font-bold' : 'text-slate-700'}">
+                                            ${row[h] || '-'}
+                                        </td>
+                                    `).join('')}
+                                </tr>
+                            `).join('')}
+                            ${data.length > 10 ? `
+                                <tr>
+                                    <td colspan="${headers.length}" class="px-4 py-4 text-center text-sm text-slate-400 italic">
+                                        ... and ${data.length - 10} more rows
+                                    </td>
+                                </tr>
+                            ` : ''}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            container.innerHTML = html;
+        };
+
+        window.cancelImport = () => {
+            csvData = [];
+            columnMapping = {};
+            document.getElementById('file-input').value = '';
+            document.getElementById('upload-section').classList.remove('hidden');
+            document.getElementById('preview-section').classList.add('hidden');
+            document.getElementById('results-section').classList.add('hidden');
+        };
+
+        window.startImport = async () => {
+            if (csvData.length === 0) {
+                alert('No data to import');
+                return;
+            }
+
+            const confirmation = confirm(`Import ${csvData.length} records? This will update existing records and create new fields if needed.`);
+            if (!confirmation) return;
+
+            // Reset results
+            results = {
+                success: 0,
+                failed: 0,
+                created: 0,
+                updated: 0,
+                errors: []
+            };
+
+            // Show progress
+            document.getElementById('preview-section').classList.add('hidden');
+            document.getElementById('progress-section').classList.remove('hidden');
+
+            const progressBar = document.getElementById('progress-bar');
+            const progressText = document.getElementById('progress-text');
+            const currentRecord = document.getElementById('current-record');
+
+            for (let i = 0; i < csvData.length; i++) {
+                const row = csvData[i];
+                const firebaseId = row['Firebase ID'];
+
+                // Update progress
+                const percent = Math.round(((i + 1) / csvData.length) * 100);
+                progressBar.style.width = percent + '%';
+                progressText.textContent = `${i + 1} / ${csvData.length}`;
+                currentRecord.textContent = firebaseId;
+
+                try {
+                    await importRecord(row);
+                } catch (error) {
+                    console.error(`Error importing ${firebaseId}:`, error);
+                }
+
+                // Small delay to prevent overwhelming Firebase
+                if (i % 10 === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+
+            // Show results
+            document.getElementById('progress-section').classList.add('hidden');
+            showResults();
+        };
+
+        const importRecord = async (row) => {
+            const firebaseId = row['Firebase ID'];
+            if (!firebaseId) {
+                results.failed++;
+                results.errors.push({ id: 'unknown', error: 'Missing Firebase ID' });
+                return;
+            }
+
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'personnel', firebaseId);
+                const docSnap = await getDoc(docRef);
+
+                // Prepare update data (exclude Firebase ID column)
+                const updateData = {};
+                Object.keys(row).forEach(key => {
+                    if (key !== 'Firebase ID' && row[key] !== '') {
+                        updateData[key.toLowerCase()] = row[key];
+                    }
+                });
+
+                if (docSnap.exists()) {
+                    // Update existing record
+                    await updateDoc(docRef, updateData);
+                    results.updated++;
+                    results.success++;
+                } else {
+                    // Create new record
+                    updateData.id = firebaseId;
+                    await setDoc(docRef, updateData);
+                    results.created++;
+                    results.success++;
+                }
+            } catch (error) {
+                results.failed++;
+                results.errors.push({ 
+                    id: firebaseId, 
+                    error: error.message 
+                });
+            }
+        };
+
+        const showResults = () => {
+            document.getElementById('results-section').classList.remove('hidden');
+            
+            document.getElementById('success-count').textContent = results.success;
+            document.getElementById('updated-count').textContent = results.updated;
+            document.getElementById('created-count').textContent = results.created;
+            document.getElementById('failed-count').textContent = results.failed;
+
+            const errorsContainer = document.getElementById('errors-container');
+            if (results.errors.length > 0) {
+                document.getElementById('errors-section').classList.remove('hidden');
+                errorsContainer.innerHTML = results.errors.map(e => `
+                    <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
+                        <span class="font-mono text-xs text-red-900 font-bold">${e.id}</span>
+                        <span class="text-red-600 ml-2">${e.error}</span>
+                    </div>
+                `).join('');
+            } else {
+                document.getElementById('errors-section').classList.add('hidden');
+            }
+        };
+
+        window.resetImport = () => {
+            cancelImport();
+        };
+
+        // Make functions available globally
+        window.db = db;
+        window.appId = appId;
+    </script>
+</head>
+<body class="bg-slate-50 min-h-screen">
+    <!-- Auth Section -->
+    <div id="auth-section" class="min-h-screen flex items-center justify-center p-8">
+        <div class="bg-white rounded-3xl p-12 shadow-xl max-w-md w-full text-center">
+            <div class="w-20 h-20 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <i class="fa-solid fa-file-import text-indigo-600 text-3xl"></i>
+            </div>
+            <h1 class="text-3xl font-black uppercase text-slate-900 mb-2">CSV Bulk Import</h1>
+            <p class="text-slate-500 mb-8">Update Firebase records via CSV</p>
+            <button onclick="signIn()" class="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-colors w-full">
+                <i class="fa-brands fa-google mr-2"></i>
+                Sign in with Google
+            </button>
+        </div>
+    </div>
+
+    <!-- App Section -->
+    <div id="app-section" class="hidden">
+        <!-- Header -->
+        <header class="bg-white border-b border-slate-200 sticky top-0 z-50">
+            <div class="max-w-7xl mx-auto px-8 py-6 flex justify-between items-center">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center">
+                        <i class="fa-solid fa-file-import text-white text-xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-2xl font-black uppercase text-slate-900">CSV Bulk Import</h1>
+                        <p class="text-xs text-slate-400 uppercase tracking-wider">Headcount Dashboard</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span class="text-sm text-slate-600"><i class="fa-solid fa-user mr-2"></i><span id="user-info"></span></span>
+                    <button onclick="signOutUser()" class="text-sm text-slate-400 hover:text-slate-600">
+                        <i class="fa-solid fa-sign-out"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <main class="max-w-7xl mx-auto px-8 py-12">
+            <!-- Instructions -->
+            <div class="bg-blue-50 border-2 border-blue-200 rounded-3xl p-8 mb-8">
+                <h2 class="text-xl font-black uppercase text-blue-900 mb-4">
+                    <i class="fa-solid fa-info-circle mr-2"></i>How It Works
+                </h2>
+                <div class="space-y-3 text-sm text-blue-800">
+                    <p><strong>1. CSV Format:</strong> First column must be "Firebase ID" (the unique identifier for each person)</p>
+                    <p><strong>2. Update Fields:</strong> Other columns can be any field name (Name, Role, Level, Tribe, Squad, Status, etc.)</p>
+                    <p><strong>3. Existing Fields:</strong> If a field exists in Firebase, it will be updated with the new value</p>
+                    <p><strong>4. New Fields:</strong> If a field doesn't exist, it will be created automatically</p>
+                    <p><strong>5. Empty Values:</strong> Empty cells are ignored (won't overwrite existing data)</p>
+                </div>
+                
+                <div class="mt-6 bg-white rounded-2xl p-4">
+                    <p class="text-xs font-black text-slate-600 uppercase mb-2">Example CSV Format:</p>
+                    <pre class="text-xs text-slate-700 font-mono overflow-x-auto">Firebase ID,Name,Role,Level,Tribe,Squad,Status
+abc123def456,Alice Johnson,Eng,IC4,Engineering,Backend,Hired
+xyz789ghi012,Bob Smith,PM,M2,Product,Mobile,Hired</pre>
+                </div>
+            </div>
+
+            <!-- Upload Section -->
+            <div id="upload-section">
+                <div class="bg-white rounded-3xl p-12 border-2 border-dashed border-slate-300 text-center">
+                    <div class="w-24 h-24 bg-slate-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
+                        <i class="fa-solid fa-upload text-slate-400 text-4xl"></i>
+                    </div>
+                    <h2 class="text-2xl font-black uppercase text-slate-900 mb-2">Upload CSV File</h2>
+                    <p class="text-slate-500 mb-8">Select a CSV file to import</p>
+                    <input 
+                        type="file" 
+                        id="file-input" 
+                        accept=".csv" 
+                        onchange="handleFileUpload(event)"
+                        class="hidden"
+                    >
+                    <button 
+                        onclick="document.getElementById('file-input').click()" 
+                        class="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black text-sm uppercase hover:bg-indigo-700 transition-colors"
+                    >
+                        <i class="fa-solid fa-file-csv mr-2"></i>
+                        Choose CSV File
+                    </button>
+                </div>
+            </div>
+
+            <!-- Preview Section -->
+            <div id="preview-section" class="hidden">
+                <div class="bg-white rounded-3xl p-8 mb-6">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <h2 class="text-2xl font-black uppercase text-slate-900">Preview Import</h2>
+                            <p class="text-sm text-slate-500 mt-1">
+                                <span class="font-bold text-indigo-600" id="record-count">0</span> records · 
+                                <span class="font-bold text-indigo-600" id="column-count">0</span> fields
+                            </p>
+                        </div>
+                        <div class="flex gap-3">
+                            <button onclick="cancelImport()" class="bg-slate-200 text-slate-700 px-6 py-3 rounded-xl font-bold text-sm uppercase hover:bg-slate-300">
+                                Cancel
+                            </button>
+                            <button onclick="startImport()" class="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold text-sm uppercase hover:bg-emerald-700">
+                                <i class="fa-solid fa-check mr-2"></i>Start Import
+                            </button>
+                        </div>
+                    </div>
+                    <div id="preview-container" class="bg-slate-50 rounded-2xl p-4"></div>
+                </div>
+            </div>
+
+            <!-- Progress Section -->
+            <div id="progress-section" class="hidden">
+                <div class="bg-white rounded-3xl p-12 text-center">
+                    <div class="w-24 h-24 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6 animate-pulse">
+                        <i class="fa-solid fa-spinner fa-spin text-indigo-600 text-4xl"></i>
+                    </div>
+                    <h2 class="text-2xl font-black uppercase text-slate-900 mb-2">Importing Records</h2>
+                    <p class="text-slate-500 mb-8">Please wait while we update the database...</p>
+                    
+                    <div class="max-w-2xl mx-auto mb-6">
+                        <div class="bg-slate-200 rounded-full h-4 overflow-hidden">
+                            <div id="progress-bar" class="bg-indigo-600 h-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                        <div class="flex justify-between mt-2 text-sm text-slate-600">
+                            <span>Progress</span>
+                            <span id="progress-text">0 / 0</span>
+                        </div>
+                    </div>
+                    
+                    <p class="text-xs text-slate-400">
+                        Current: <span class="font-mono text-indigo-600" id="current-record">-</span>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div id="results-section" class="hidden">
+                <div class="bg-white rounded-3xl p-8 mb-6">
+                    <div class="text-center mb-8">
+                        <div class="w-24 h-24 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <i class="fa-solid fa-check text-emerald-600 text-4xl"></i>
+                        </div>
+                        <h2 class="text-2xl font-black uppercase text-slate-900 mb-2">Import Complete</h2>
+                        <p class="text-slate-500">Your records have been processed</p>
+                    </div>
+
+                    <div class="grid grid-cols-4 gap-6 mb-8">
+                        <div class="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-center">
+                            <div class="text-4xl font-black text-emerald-600 mb-2" id="success-count">0</div>
+                            <div class="text-xs font-black text-emerald-700 uppercase">Success</div>
+                        </div>
+                        <div class="bg-blue-50 border border-blue-200 rounded-2xl p-6 text-center">
+                            <div class="text-4xl font-black text-blue-600 mb-2" id="updated-count">0</div>
+                            <div class="text-xs font-black text-blue-700 uppercase">Updated</div>
+                        </div>
+                        <div class="bg-purple-50 border border-purple-200 rounded-2xl p-6 text-center">
+                            <div class="text-4xl font-black text-purple-600 mb-2" id="created-count">0</div>
+                            <div class="text-xs font-black text-purple-700 uppercase">Created</div>
+                        </div>
+                        <div class="bg-red-50 border border-red-200 rounded-2xl p-6 text-center">
+                            <div class="text-4xl font-black text-red-600 mb-2" id="failed-count">0</div>
+                            <div class="text-xs font-black text-red-700 uppercase">Failed</div>
+                        </div>
+                    </div>
+
+                    <div id="errors-section" class="hidden mb-6">
+                        <h3 class="text-lg font-black uppercase text-red-900 mb-4">
+                            <i class="fa-solid fa-exclamation-triangle mr-2"></i>Errors
+                        </h3>
+                        <div id="errors-container" class="space-y-2 max-h-64 overflow-y-auto"></div>
+                    </div>
+
+                    <div class="text-center">
+                        <button onclick="resetImport()" class="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black text-sm uppercase hover:bg-indigo-700 transition-colors">
+                            <i class="fa-solid fa-redo mr-2"></i>Import Another File
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</body>
+</html>
