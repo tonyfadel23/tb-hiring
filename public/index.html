@@ -3158,6 +3158,50 @@
             // Get ratios
             const ratios = getLeverageRatios(hired);
             
+            // CRITICAL: Create role x level matrix for AI to answer "Eng managers" type questions
+            const roleByLevelMatrix = {};
+            const roles = ['Eng', 'PM', 'PD', 'DS', 'Data Engineering', 'Product Ops'];
+            const levels = ['IC1', 'IC2', 'IC3', 'IC4', 'IC5', 'IC6', 'M1', 'M2', 'M3', 'M4'];
+            
+            roles.forEach(role => {
+                roleByLevelMatrix[role] = {};
+                levels.forEach(level => {
+                    const count = hired.filter(p => {
+                        const personRole = p.role || '';
+                        const personLevel = (p.level || '').toUpperCase();
+                        
+                        // Match role
+                        let roleMatch = false;
+                        if (role === 'Eng') roleMatch = getFunctionKey(personRole) === 'eng';
+                        else if (role === 'PM') roleMatch = getFunctionKey(personRole) === 'prod';
+                        else if (role === 'PD') roleMatch = getFunctionKey(personRole) === 'design';
+                        else if (role === 'DS' || role === 'Data Engineering') roleMatch = getFunctionKey(personRole) === 'data';
+                        else if (role === 'Product Ops') roleMatch = personRole.toLowerCase().includes('product') && personRole.toLowerCase().includes('ops');
+                        
+                        return roleMatch && personLevel === level;
+                    }).length;
+                    
+                    if (count > 0) {
+                        roleByLevelMatrix[role][level] = count;
+                    }
+                });
+            });
+            
+            // Calculate specific combinations for common questions
+            const roleManagers = {
+                eng: hired.filter(p => getFunctionKey(p.role) === 'eng' && ['M1','M2','M3','M4'].includes((p.level || '').toUpperCase())).length,
+                pm: hired.filter(p => getFunctionKey(p.role) === 'prod' && ['M1','M2','M3','M4'].includes((p.level || '').toUpperCase())).length,
+                design: hired.filter(p => getFunctionKey(p.role) === 'design' && ['M1','M2','M3','M4'].includes((p.level || '').toUpperCase())).length,
+                data: hired.filter(p => getFunctionKey(p.role) === 'data' && ['M1','M2','M3','M4'].includes((p.level || '').toUpperCase())).length
+            };
+            
+            const roleIC4Plus = {
+                eng: hired.filter(p => getFunctionKey(p.role) === 'eng' && ['IC4','IC5','IC6'].includes((p.level || '').toUpperCase())).length,
+                pm: hired.filter(p => getFunctionKey(p.role) === 'prod' && ['IC4','IC5','IC6'].includes((p.level || '').toUpperCase())).length,
+                design: hired.filter(p => getFunctionKey(p.role) === 'design' && ['IC4','IC5','IC6'].includes((p.level || '').toUpperCase())).length,
+                data: hired.filter(p => getFunctionKey(p.role) === 'data' && ['IC4','IC5','IC6'].includes((p.level || '').toUpperCase())).length
+            };
+            
             // Get categories summary
             const categorySummary = {};
             config.categories.forEach(cat => {
@@ -3196,6 +3240,17 @@
                     pm: totalCounts.pm,
                     design: totalCounts.pd,
                     data: totalCounts.da
+                },
+                roleByLevel: roleByLevelMatrix,
+                managers: {
+                    byRole: roleManagers,
+                    total: mgrRatio.managers,
+                    description: "Managers by role (M1-M4 only)"
+                },
+                ic4Plus: {
+                    byRole: roleIC4Plus,
+                    total: seniorEngRatio.seniorEngs,
+                    description: "IC4+ by role (IC4, IC5, IC6)"
                 },
                 ratios: {
                     engToPM: ratios.pm ? `1:${ratios.pm}` : 'N/A',
@@ -3260,7 +3315,40 @@
 
 ${JSON.stringify(orgContext, null, 2)}
 
-Answer questions about this organization data accurately and concisely. Use the data provided to give specific numbers and insights. Format your responses clearly.`,
+CRITICAL INSTRUCTIONS FOR ANSWERING QUESTIONS:
+
+1. ROLE + SENIORITY QUESTIONS (USE PRE-CALCULATED DATA):
+   - "How many Eng managers?" → Use managers.byRole.eng (already calculated)
+   - "How many PM managers?" → Use managers.byRole.pm
+   - "How many IC4 engineers?" → Use roleByLevel.Eng.IC4
+   - "How many IC4+ engineers?" → Use ic4Plus.byRole.eng
+   - The data includes:
+     * roleByLevel: Complete matrix of Role x Level counts
+     * managers.byRole: Pre-calculated manager counts by role
+     * ic4Plus.byRole: Pre-calculated IC4+ counts by role
+
+2. UNDERSTANDING THE DATA STRUCTURE:
+   - roleByLevel.Eng shows ALL engineers by level (IC1, IC2, IC3, IC4, IC5, IC6, M1, M2, M3, M4)
+   - managers.byRole.eng = Eng people with M1-M4 levels ONLY
+   - ic4Plus.byRole.eng = Eng people with IC4, IC5, IC6 levels ONLY
+   - managerRatio.managers = TOTAL managers across ALL roles (not role-specific)
+
+3. EXAMPLES OF CORRECT ANSWERS:
+   Q: "How many Eng managers do we have?"
+   A: Look at managers.byRole.eng (e.g., "We have 8 Engineering managers (M1-M4 levels)")
+   
+   Q: "How many IC4 engineers?"
+   A: Look at roleByLevel.Eng.IC4 (e.g., "We have 12 IC4 engineers")
+   
+   Q: "How many managers total?"
+   A: Look at managers.total or managerRatio.managers (e.g., "We have 25 total managers across all roles")
+
+4. RATIO CALCULATIONS:
+   - Eng:PM ratios use juniorEngCount (excludes IC4+, M-levels)
+   - Manager:IC ratio uses managers.total (M1-M4 across all roles)
+   - Always reference the "note" fields for clarification
+
+Answer questions accurately using the pre-calculated data. Format responses clearly and cite the specific data field you're using.`,
                         messages: chatMessages.map(msg => ({
                             role: msg.role,
                             content: msg.content
